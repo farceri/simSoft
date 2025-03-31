@@ -7,6 +7,8 @@
 #define DEFS_H_
 
 #include <vector>
+#include <cmath>
+#include <random>
 #include <execution>  // For parallel execution policy
 
 // global constants
@@ -103,60 +105,11 @@ struct wrappedGaussNum
         std::normal_distribution<double> dist(a, b);
         rng.discard(n);
         double wrapNum = dist(rng);
-        wrapNum += M_PI;
-        wrapNum -= 2.0 * M_PI * std::floor(wrapNum / (2.0 * M_PI));
-        wrapNum -= M_PI;
+        wrapNum += PI;
+        wrapNum -= 2.0 * PI * floor(wrapNum / (2.0 * PI));
+        wrapNum -= PI;
         return wrapNum;
     }
-};
-
-// copied from github https://github.com/NVIDIA/thrust/blob/master/examples/strided_range.cu
-template <typename Iterator>
-class strided_range
-{
-    public:
-
-    typedef typename thrust::iterator_difference<Iterator>::type difference_type;
-
-    struct stride_functor : public thrust::unary_function<difference_type,difference_type>
-    {
-        difference_type stride;
-
-        stride_functor(difference_type stride)
-            : stride(stride) {}
-
-        __host__ __device__
-        difference_type operator()(const difference_type& i) const
-        { 
-            return stride * i;
-        }
-    };
-
-    typedef typename thrust::counting_iterator<difference_type>                   CountingIterator;
-    typedef typename thrust::transform_iterator<stride_functor, CountingIterator> TransformIterator;
-    typedef typename thrust::permutation_iterator<Iterator,TransformIterator>     PermutationIterator;
-
-    // type of the strided_range iterator
-    typedef PermutationIterator iterator;
-
-    // construct strided_range for the range [first,last)
-    strided_range(Iterator first, Iterator last, difference_type stride)
-        : first(first), last(last), stride(stride) {}
-   
-    iterator begin(void) const
-    {
-        return PermutationIterator(first, TransformIterator(CountingIterator(0), stride_functor(stride)));
-    }
-
-    iterator end(void) const
-    {
-        return begin() + ((last - first) + (stride - 1)) / stride;
-    }
-    
-    protected:
-    Iterator first;
-    Iterator last;
-    difference_type stride;
 };
 
 #endif /* DEFS_H_ */

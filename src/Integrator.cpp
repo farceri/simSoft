@@ -60,9 +60,14 @@ void SoftLangevin::updatePosition(double timeStep) {
 }
 
 void SoftLangevin::conserveMomentum() {
-  typedef std::vector<double>::iterator Iterator;
-  strided_range<Iterator> vel_x(sp_->vel.begin(), sp_->vel.end(), 2);
-  strided_range<Iterator> vel_y(sp_->vel.begin() + 1, sp_->vel.end(), 2);
+  std::vector<double> vel_x(sp_->vel.size() / 2);
+  std::vector<double> vel_y(sp_->vel.size() / 2);
+  std::vector<long> idx(sp_->vel.size() / 2);
+  std::iota(idx.begin(), idx.end(), 0);  // Generate sequence 0, 1, 2, ..., vel.size()/2 - 1
+  for (size_t i = 0; i < idx.size(); ++i) {
+      vel_x[i] = sp_->vel[idx[i] * 2];  // Manually gather every even element from vel
+      vel_y[i] = sp_->vel[idx[i] * 2 + 1];  // Manually gather every odd element from vel
+  }
   double meanVelx = std::reduce(vel_x.begin(), vel_x.end(), double(0), std::plus<double>()) / sp_->numParticles;
   double meanVely = std::reduce(vel_y.begin(), vel_y.end(), double(0), std::plus<double>()) / sp_->numParticles;
 

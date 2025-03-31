@@ -4,7 +4,7 @@
 //
 // HEADER FILE FOR SIMSOFT CLASS
 
-#ifndef _H
+#ifndef SIMSOFT_H
 #define SIMSOFT_H
 
 #include "defs.h"
@@ -21,7 +21,6 @@ using std::tuple;
 
 struct simControlStruct {
   enum class particleEnum {passive, active, vicsek} particleType;
-  enum class boundaryEnum {pbc, fixed} boundaryType;
   enum class neighborEnum {neighbor, allToAll} neighborType;
   enum class potentialEnum {harmonic, lennardJones, WCA, doubleLJ, LJMinusPlus, LJWCA} potentialType;
 };
@@ -119,9 +118,6 @@ public:
   //setters and getters
   void setParticleType(simControlStruct::particleEnum particleType_);
 
-  void setBoundaryType(simControlStruct::boundaryEnum boundaryType_);
-	simControlStruct::boundaryEnum getBoundaryType();
-
   void setNeighborType(simControlStruct::neighborEnum neighborType_);
 	simControlStruct::neighborEnum getNeighborType();
 
@@ -182,17 +178,18 @@ public:
 
   void scaleParticles(double scale);
 
-  void scaleParticlePacking();
+  void scalePacking();
 
   void scaleVelocities(double scale);
 
-  void initializeParticleAngles();
+  void initializeAngles();
 
   // force and energy
   void setEnergyCostant(double ec_);
   double getEnergyCostant();
 
   double setTimeStep(double dt_);
+  double getTimeStep();
 
   void setSelfPropulsionParams(double driving_, double taup_);
   void getSelfPropulsionParams(double &driving_, double &taup_);
@@ -214,9 +211,34 @@ public:
 
   void calcVicsekAlignment();
 
-  void calcInteraction();
+  // inline functions
+  inline void getParticlePos(const long pId, double* thisPos);
 
-  void addFixedWallInteraction();
+  inline bool extractOtherParticle(const long pId, const long otherId, double* otherPos, double& otherRad);
+
+  inline bool extractParticleNeighbor(const long pId, const long nListId, double* otherPos, double& otherRad);
+
+  inline double pbcDistance(const double x1, const double x2, const long dim);
+
+  inline double calcDeltaAndDistance(const double* thisVec, const double* otherVec, double* deltaVec);
+
+  inline double calcDistance(const double* thisVec, const double* otherVec);
+
+  inline double calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
+
+  inline double calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
+
+  inline double calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
+
+  inline double calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce);
+
+  inline double calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce);
+
+  void neighborInteraction();
+  
+  void allToAllInteraction();
+
+  void calcInteraction();
 
   void calcForceEnergy();
 
@@ -233,7 +255,7 @@ public:
   void adjustKineticEnergy(double prevEtot);
 
   // neighbor update
-  double setDisplacementCutoff(double cutoff_);
+  void setDisplacementCutoff(double cutoff_);
 
   void resetUpdateCount();
 
@@ -241,9 +263,11 @@ public:
 
   void removeCOMDrift();
 
-  void checkParticleDisplacement();
+  void calcDisplacement(int* flag, double cutoff);
 
-  void checkParticleNeighbors();
+  void checkDisplacement();
+
+  void checkNeighbors();
 
   void checkVicsekNeighbors();
 
@@ -251,16 +275,20 @@ public:
 
   std::vector<long> getVicsekNeighbors();
 
-  void calcNeighbors(double cutDistance);
+  void calcNeighbors();
 
-  void calcNeighborList(double cutDistance);
+  void fillNeighborList();
+
+  void calcNeighborList();
+
+  void fillVicsekNeighborList();
 
   void calcVicsekNeighborList();
 
   // minimizer functions
   void initFIRE(std::vector<double> &FIREparams, long minStep, long maxStep, long numDOF);
 
-  void setParticleMassFIRE();
+  void setMassFIRE();
 
   void setTimeStepFIRE(double timeStep);
 
@@ -290,12 +318,12 @@ public:
 
   void setThreeParticleTestPacking(double sigma01, double sigma2, double lx, double ly, double y01, double y2, double vel2);
 
-  void firstUpdate(double timeStep);
+  void updatePos(double timeStep);
 
-  void secondUpdate(double timeStep);
+  void updateVel(double timeStep);
 
-  void testInteraction(double timeStep);
+  void verletLoop(double timeStep);
 
 };
 
-#endif /* SP2D_H */
+#endif /* SIMSOFT_H */

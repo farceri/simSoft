@@ -15,7 +15,7 @@
 using namespace std;
 
 //********************** constructor and deconstructor ***********************//
-FIRE::FIRE(SP2D * spPtr):sp_(spPtr){
+FIRE::FIRE(simSoft * spPtr):sp_(spPtr){
 	// Note that mass is used only for particle-level FIRE
 	mass.resize(sp_->numParticles * sp_->nDim);
 	// Set variables to zero

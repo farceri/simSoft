@@ -17,21 +17,22 @@ class Integrator // initializer
 {
 public:
   double Tbath = 0.;
-  SimConfig() = default;
-  SimConfig(double Tbath):Tbath(Tbath){}
+  Integrator() = default;
+  Integrator(double Tbath):Tbath(Tbath){}
 };
 
 class SimInterface // integration functions
 {
 public:
   simSoft * sp_;
-  SimConfig config;
+  Integrator config;
   double mass = 1.;
   double gamma = 1.;
   double noise = 0.;
+  std::vector<double> rand;
 
   SimInterface() = default;
-  SimInterface(simSoft * spPtr, SimConfig config):sp_(spPtr),config(config){}
+  SimInterface(simSoft * spPtr, Integrator config):sp_(spPtr),config(config){}
   virtual ~SimInterface() = default;
 
   virtual void injectKineticEnergy() = 0;
@@ -48,7 +49,7 @@ class SoftLangevin: public SimInterface
 {
 public:
   SoftLangevin() = default;
-  SoftLangevin(SP2D * spPtr, SimConfig config) : SimInterface:: SimInterface(spPtr, config){;}
+  SoftLangevin(simSoft * spPtr, Integrator config) : SimInterface:: SimInterface(spPtr, config){;}
 
   virtual void injectKineticEnergy();
   virtual void updatePosition(double timeStep);
@@ -63,7 +64,7 @@ class SoftNVE: public SoftLangevin
 {
 public:
   SoftNVE() = default;
-  SoftNVE(SP2D * spPtr, SimConfig config) : SoftLangevin:: SoftLangevin(spPtr, config){;}
+  SoftNVE(simSoft * spPtr, Integrator config) : SoftLangevin:: SoftLangevin(spPtr, config){;}
 
   virtual void integrate();
 };
@@ -73,11 +74,11 @@ class SoftNoseHoover: public SoftLangevin
 {
 public:
   SoftNoseHoover() = default;
-  SoftNoseHoover(SP2D * spPtr, SimConfig config) : SoftLangevin:: SoftLangevin(spPtr, config){;}
+  SoftNoseHoover(simSoft * spPtr, Integrator config) : SoftLangevin:: SoftLangevin(spPtr, config){;}
 
   virtual void updateVelocity(double timeStep);
   virtual void updateThermalVel();
   virtual void integrate();
 };
 
-#endif // SIMULATOR_H //
+#endif /* SIMULATOR_H */

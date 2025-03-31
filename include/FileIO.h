@@ -6,7 +6,7 @@
 #ifndef FILEIO_H
 #define FILEIO_H
 
-#include "SP2D.h"
+#include "simSoft.h"
 #include "defs.h"
 #include <iostream>
 #include <string>
@@ -16,7 +16,7 @@
 
 using namespace std;
 
-class ioSPFile
+class ioFile
 {
 public:
   ifstream inputFile;
@@ -24,10 +24,10 @@ public:
   ofstream energyFile;
   ofstream memoryFile;
   ofstream corrFile;
-  SP2D * sp_;
+  simSoft * sp_;
 
-  ioSPFile() = default;
-  ioSPFile(SP2D * spPtr) {
+  ioFile() = default;
+  ioFile(simSoft * spPtr) {
     this->sp_ = spPtr;
   }
 
@@ -35,7 +35,7 @@ public:
   void openInputFile(string fileName) {
     inputFile = ifstream(fileName.c_str());
     if (!inputFile.is_open()) {
-      cerr << "ioSPFile::openInputFile: error: could not open input file " << fileName << endl;
+      cerr << "ioFile::openInputFile: error: could not open input file " << fileName << endl;
       exit(1);
     }
   }
@@ -43,7 +43,7 @@ public:
   void openOutputFile(string fileName) {
     outputFile = ofstream(fileName.c_str());
     if (!outputFile.is_open()) {
-      cerr << "ioSPFile::openOutputFile: error: could not open input file " << fileName << endl;
+      cerr << "ioFile::openOutputFile: error: could not open input file " << fileName << endl;
       exit(1);
     }
   }
@@ -51,349 +51,43 @@ public:
   void openEnergyFile(string fileName) {
     energyFile = ofstream(fileName.c_str());
     if (!energyFile.is_open()) {
-      cerr << "ioSPFile::openEnergyFile: error: could not open input file " << fileName << endl;
+      cerr << "ioFile::openEnergyFile: error: could not open input file " << fileName << endl;
       exit(1);
     }
   }
-
-  void reopenEnergyFile(string fileName) {
-    energyFile = ofstream(fileName.c_str(), std::fstream::app);
-    if (!energyFile.is_open()) {
-      cerr << "ioSPFile::openEnergyFile: error: could not open input file " << fileName << endl;
-      exit(1);
-    }
-  }
-
-  void openMemoryFile(string fileName) {
-    memoryFile = ofstream(fileName.c_str());
-    if (!memoryFile.is_open()) {
-      cerr << "ioSPFile::openMemoryFile: error: could not open input file " << fileName << endl;
-      exit(1);
-    }
-  }
-
-  void saveMemoryUsage(long step) {
-    memoryFile << step + 1 << "\t";
-    memoryFile << setprecision(12) << sp_->checkGPUMemory() << endl;
-  }
-
-  void saveElapsedTime(double elapsedTime) {
-    memoryFile << "Elapsed time - ms:" << setprecision(12) << elapsedTime << " min: " << elapsedTime / (1000*60) << " hr: " << elapsedTime / (1000*60*60) << endl;
-  }
-
-  void closeMemoryFile() {
-    memoryFile.close();
-  }
-
-  void saveSimpleEnergy(long step, double timeStep, long numParticles) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = epot + ekin;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << endl;
-  }
-
-  void saveSimpleEnergyAB(long step, double timeStep, long numParticles) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = epot + ekin;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    std::tuple<double, double, long> eab = sp_->getParticleEnergyAB();
-    long numParticlesAB = get<2>(eab);
-    energyFile << setprecision(precision) << get<0>(eab) << "\t";
-    energyFile << setprecision(precision) << get<1>(eab) << "\t";
-    energyFile << numParticlesAB << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << endl;
-  }
-
-  void saveStrainSimpleEnergy(long step, double timeStep, long numParticles, double strain) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = epot + ekin;
-    energyFile << strain << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << endl;
-  }
-
-  void saveEnergy(long step, double timeStep, long numParticles) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = epot + ekin;
-    double edamp = sp_->getDampingWork();
-    double enoise = sp_->getNoiseWork();
-    double heat = edamp + enoise;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    energyFile << setprecision(precision) << edamp / numParticles << "\t";
-    energyFile << setprecision(precision) << enoise / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      heat += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << heat / numParticles << endl;
-  }
-
-  void saveEnergyAB(long step, double timeStep, long numParticles) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = epot + ekin;
-    double edamp = sp_->getDampingWork();
-    double enoise = sp_->getNoiseWork();
-    double heat = edamp + enoise;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    energyFile << setprecision(precision) << edamp / numParticles << "\t";
-    energyFile << setprecision(precision) << enoise / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      etot += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << heat / numParticles << "\t";
-    std::tuple<double, double, double, long> eab = sp_->getParticleWorkAB();
-    long numParticlesAB = get<3>(eab);
-    energyFile << setprecision(precision) << get<0>(eab) << "\t";
-    energyFile << setprecision(precision) << get<1>(eab) << "\t";
-    energyFile << setprecision(precision) << get<2>(eab) << "\t";
-    energyFile << numParticlesAB << endl;
-  }
-
-  void saveAlignEnergy(long step, double timeStep, long numParticles) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleAngularMomentum();
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      double velCorr = sp_->getNeighborVelocityCorrelation();
-      energyFile << "\t" << setprecision(precision) << velCorr;
-    } else if(sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
-      double velCorr = sp_->getVicsekVelocityCorrelation();
-      energyFile << "\t" << setprecision(precision) << velCorr;
-    } else {
-      energyFile << "\t";
-    }
-    std::tuple<double, double> wall(0,0);
-    switch (sp_->simControl.boundaryType) {
-      case simControlStruct::boundaryEnum::rigid:
-      case simControlStruct::boundaryEnum::mobile:
-      case simControlStruct::boundaryEnum::fixed:
-      case simControlStruct::boundaryEnum::reflect:
-      wall = sp_->getWallPressure();
-      energyFile << "\t" << setprecision(precision) << get<0>(wall);
-      energyFile << "\t" << setprecision(precision) << get<1>(wall);
-      break;
-      default:
-      break;
-    }
-    energyFile << endl;
-  }
-
-  void saveStrainEnergy(long step, double timeStep, long numParticles, double strain) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double edamp = sp_->getDampingWork();
-    double etot = epot + ekin + edamp;
-    energyFile << strain << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << edamp / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      etot += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << etot / numParticles << endl;
-  }
-
-  void saveEnergyISF(long step, double timeStep, double waveNumber, long numParticles) {
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePotentialEnergy() / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleKineticEnergy() / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePressure() << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleISF(waveNumber) << endl;
-  }
-
-  void savePressureEnergy(long step, double timeStep, long numParticles, bool wallPressure) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = epot + ekin;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      etot += sp_->getDampingWork();
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      etot += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePressure();
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      energyFile << "\t" << setprecision(precision) << sp_->getParticleActivePressure();
-    }
-    if(wallPressure == true) {
-      energyFile << "\t" << setprecision(precision) << sp_->getParticleWallPressure() << endl;
-    } else {
-      energyFile << endl;
-    }
-  }
-
-  void saveColumnWorkEnergy(long step, double timeStep, long numParticles, double width) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = ekin + epot;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      etot += sp_->getDampingWork();
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      etot += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    std::tuple<double, double> work = sp_->getColumnWork(width);
-    energyFile << setprecision(precision) << get<0>(work) << "\t";
-    energyFile << setprecision(precision) << get<1>(work) << "\t";
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      std::tuple<double, double> activeWork = sp_->getColumnActiveWork(width);
-      energyFile << setprecision(precision) << get<0>(activeWork) << "\t";
-      energyFile << setprecision(precision) << get<1>(activeWork) << endl;
-    } else {
-      energyFile << endl;
-    }
-  }
-
-  void saveParticleWallEnergy(long step, double timeStep, long numParticles, double range) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = ekin + epot;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      etot += sp_->getDampingWork();
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      etot += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleWallForce(range, 0.0) << endl;
-  }
-
-  void saveParticleColumnWallEnergy(long step, double timeStep, long numParticles, double range, double width) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = ekin + epot;
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles;
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active) {
-      etot += sp_->getDampingWork();
-      double eactive = sp_->getSelfPropulsionWork();
-      energyFile << "\t" << setprecision(precision) << eactive / numParticles << "\t";
-      etot += eactive;
-    } else {
-      energyFile << "\t";
-    }
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleWallForce(range, width) << endl;
-  }
-
-  void saveStressComponents(long step, double timeStep, long numParticles, double range) {
-    std::tuple<double, double, double> stress = sp_->getParticleStressComponents();
-    energyFile << setprecision(precision) << get<0>(stress) << "\t";
-    energyFile << setprecision(precision) << get<1>(stress) << "\t";
-    energyFile << setprecision(precision) << get<2>(stress) << endl;
-  }
-
-  void saveParticleNoseHooverEnergy(long step, double timeStep, long numParticles) {
-    double epot = sp_->getParticlePotentialEnergy();
-    double ekin = sp_->getParticleKineticEnergy();
-    double etot = sp_->getParticleEnergy();
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << ekin / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    double mass, damping;
-    sp_->getNoseHooverParams(mass, damping);
-    energyFile << setprecision(precision) << damping << endl;
-  }
-
-  void saveParticleDoubleNoseHooverEnergy(long step, double timeStep, long numParticles, long num1) {
-    double epot = sp_->getParticlePotentialEnergy();
-    std::tuple<double, double, double> ekins = sp_->getParticleKineticEnergy12();
-    double etot = epot + get<2>(ekins);
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << get<0>(ekins) / num1 << "\t";
-    energyFile << setprecision(precision) << get<1>(ekins) / (numParticles - num1) << "\t";
-    energyFile << setprecision(precision) << get<2>(ekins) / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << "\t";
-    double mass, damping1, damping2;
-    sp_->getDoubleNoseHooverParams(mass, damping1, damping2);
-    energyFile << setprecision(precision) << damping1 << "\t";
-    energyFile << setprecision(precision) << damping2 << endl;
-  }
-
-  void saveParticleDoubleEnergy(long step, double timeStep, long numParticles, long num1) {
-    double epot = sp_->getParticlePotentialEnergy() / numParticles;
-    std::tuple<double, double, double> ekins = sp_->getParticleKineticEnergy12();
-    double etot = epot + get<2>(ekins);
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << epot / numParticles << "\t";
-    energyFile << setprecision(precision) << get<0>(ekins) / num1 << "\t";
-    energyFile << setprecision(precision) << get<1>(ekins) / (numParticles - num1) << "\t";
-    energyFile << setprecision(precision) << get<2>(ekins) / numParticles << "\t";
-    energyFile << setprecision(precision) << etot / numParticles << endl;
-  }
-
-  void saveParticleStressEnergy(long step, double timeStep, long numParticles, double range) {
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePotentialEnergy() / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleKineticEnergy() / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePressure() << "\t";
-    //energyFile << setprecision(precision) << sp_->getParticleShearStress() << endl;
-    energyFile << setprecision(precision) << sp_->getParticleExtensileStress() << endl;
-  }
-
-  void saveParticleFixedWallEnergy(long step, double timeStep, long numParticles) {
-    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePotentialEnergy() / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleKineticEnergy() / numParticles << "\t";
-    energyFile << setprecision(precision) << sp_->getParticlePressure() << "\t";
-    energyFile << setprecision(precision) << sp_->getParticleWallPressure() << endl;
-  }
-
+  
   void closeEnergyFile() {
     energyFile.close();
   }
 
-  std::vector<double> read1DIndexFile(string fileName, long numRows) {
+  void saveEnergy(long step, double timeStep, long numParticles) {
+    double epot = sp_->getPotentialEnergy();
+    double ekin = sp_->getKineticEnergy();
+    double etot = epot + ekin;
+    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
+    energyFile << setprecision(precision) << epot / numParticles << "\t";
+    energyFile << setprecision(precision) << ekin / numParticles << "\t";
+    energyFile << setprecision(precision) << etot / numParticles << endl;
+  }
+
+  //////////////////////////// write this function in array form ////////////////////////////
+  double read0DFile(string fileName) {
+    double data;
+    this->openInputFile(fileName);
+    string inputString;
+    getline(inputFile, inputString);
+    sscanf(inputString.c_str(), "%lf", &data);
+    inputFile.close();
+    return data;
+  }
+
+  void save0DFile(string fileName, double data) {
+    this->openOutputFile(fileName);
+    outputFile << setprecision(precision) << data << endl;
+    outputFile.close();
+  }
+
+  std::vector<long> read1DIndexFile(string fileName, long numRows) {
     std::vector<long> data;
     this->openInputFile(fileName);
     string inputString;
@@ -414,22 +108,6 @@ public:
       //sprintf(outputFile, "%ld \n", data[row]);
       outputFile << setprecision(precision) << data[row] << endl;
     }
-    outputFile.close();
-  }
-
-  double read0DFile(string fileName) {
-    double data;
-    this->openInputFile(fileName);
-    string inputString;
-    getline(inputFile, inputString);
-    sscanf(inputString.c_str(), "%lf", &data);
-    inputFile.close();
-    return data;
-  }
-
-  void save0DFile(string fileName, double data) {
-    this->openOutputFile(fileName);
-    outputFile << setprecision(precision) << data << endl;
     outputFile.close();
   }
 
@@ -457,7 +135,6 @@ public:
     outputFile.close();
   }
 
-//////////////////////////// write this function in array form ////////////////////////////
   std::vector<double> read2DFile(string fileName, long numRows) {
     std::vector<double> data;
     this->openInputFile(fileName);
@@ -468,22 +145,6 @@ public:
       sscanf(inputString.c_str(), "%lf %lf", &data1, &data2);
       data.push_back(data1);
       data.push_back(data2);
-    }
-    inputFile.close();
-    return data;
-  }
-
-  std::vector<double> read3DFile(string fileName, long numRows) {
-    std::vector<double> data;
-    this->openInputFile(fileName);
-    string inputString;
-    double data1, data2, data3;
-    for (long row = 0; row < numRows; row++) {
-      getline(inputFile, inputString);
-      sscanf(inputString.c_str(), "%lf %lf %lf", &data1, &data2, &data3);
-      data.push_back(data1);
-      data.push_back(data2);
-      data.push_back(data3);
     }
     inputFile.close();
     return data;
@@ -518,6 +179,22 @@ public:
     }
   }
 
+  std::vector<double> read3DFile(string fileName, long numRows) {
+    std::vector<double> data;
+    this->openInputFile(fileName);
+    string inputString;
+    double data1, data2, data3;
+    for (long row = 0; row < numRows; row++) {
+      getline(inputFile, inputString);
+      sscanf(inputString.c_str(), "%lf %lf %lf", &data1, &data2, &data3);
+      data.push_back(data1);
+      data.push_back(data2);
+      data.push_back(data3);
+    }
+    inputFile.close();
+    return data;
+  }
+
   std::vector<double> readBoxSize(string dirName, long nDim_) {
     std::vector<double> boxSize_(nDim_);
     boxSize_ = read1DFile(dirName + "boxSize.dat", nDim_);
@@ -525,349 +202,172 @@ public:
     return boxSize_;
   }
 
-  long readWallParams(string dirName) {
-    string fileParams = dirName + "wallParams.dat";
-    ifstream readParams(fileParams.c_str());
-    if (!readParams.is_open()) {
-      cout << "Error: Unable to open file " << fileParams << " - setting default values" << endl;
-      return 0;
-    }
-    string paramName;
-    double paramValue;
-    long numWall_ = 0;
-    double wallRad_ = 0.;
-    double wallArea0_ = 0.;
-    while (readParams >> paramName >> paramValue) {
-      if(paramName == "numWall") {
-        numWall_ = paramValue;
-      } else if(paramName == "wallRad") {
-        wallRad_ = paramValue;
-      } else if(paramName == "wallArea0") {
-        wallArea0_ = paramValue;
-      }
-    }
-    readParams.close();
-    double boxRadius_ = read0DFile(dirName + "boxSize.dat");
-    sp_->setMobileWallParams(numWall_, wallRad_, wallArea0_);
-    cout << "FileIO::readWallParams: wallRad: " << wallRad_ << " wallArea0: " << wallArea0_ << "numWall: " << numWall_ << endl;
-    if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::plastic) {
-      sp_->setPlasticVariables(1.);
-    }
-    return numWall_;
-  }
-
-  void readRigidWall(string dirName, long numWall_, long nDim_) {
-    sp_->initWallVariables(numWall_);
-    sp_->initWallNeighbors(numWall_);
-    std::vector<double> wPos_(numWall_ * nDim_);
-    
-    wPos_ = read2DFile(dirName + "wallPos.dat", numWall_);
-    sp_->setWallPositions(wPos_);
-    
-    std::vector<double> wallDynamics_(3);
-    wallDynamics_ = read1DFile(dirName + "wallDynamics.dat", 3);
-    sp_->setWallAngleDynamics(wallDynamics_);
-  }
-
-  void readMobileWall(string dirName, long numWall_, long nDim_) {
-    sp_->initWallVariables(numWall_);
-    sp_->initWallShapeVariables(numWall_);
-    sp_->initWallNeighbors(numWall_);
-    std::vector<double> wLength_(numWall_);
-    std::vector<double> wAngle_(numWall_);
-    std::vector<double> wPos_(numWall_ * nDim_);
-    std::vector<double> wVel_(numWall_ * nDim_);
-    
-    wPos_ = read2DFile(dirName + "wallPos.dat", numWall_);
-    sp_->setWallPositions(wPos_);
-    wVel_ = read2DFile(dirName + "wallVel.dat", numWall_);
-    sp_->setWallVelocities(wVel_);
-  }
-
-  void readWall(string dirName, long nDim_) {
-    long numWall_ = readWallParams(dirName);
-    if(numWall_ != 0) {
-      switch (sp_->simControl.boundaryType) {
-        case simControlStruct::boundaryEnum::rigid:
-        readRigidWall(dirName, numWall_, nDim_);
-        break;
-        case simControlStruct::boundaryEnum::mobile:
-        readMobileWall(dirName, numWall_, nDim_);
-        break;
-        default:
-        break;
-      }
-    } else {
-      cout << "FileIO::readWall: numWall is zero! WARNING!" << endl;
-    }
-  }
-
-  void readParticlePackingFromDirectory(string dirName, long numParticles_, long nDim_) {
+  void readPackingFromDirectory(string dirName, long numParticles_, long nDim_) {
     std::vector<double> pPos_(numParticles_ * nDim_);
     std::vector<double> pRad_(numParticles_);
 
     if(nDim_ == 2) {
-      pPos_ = read2DFile(dirName + "particlePos.dat", numParticles_);
+      pPos_ = read2DFile(dirName + "pos.dat", numParticles_);
     } else if(nDim_ == 3) {
-      pPos_ = read3DFile(dirName + "particlePos.dat", numParticles_);
+      pPos_ = read3DFile(dirName + "pos.dat", numParticles_);
     } else {
       cout << "FileIO::readParticlePackingFromDirectory: only dimensions 2 and 3 are allowed!" << endl;
     }
-    sp_->setParticlePositions(pPos_);
-    pRad_ = read1DFile(dirName + "particleRad.dat", numParticles_);
-    sp_->setParticleRadii(pRad_);
+    sp_->setPositions(pPos_);
+    pRad_ = read1DFile(dirName + "rad.dat", numParticles_);
+    sp_->setRadii(pRad_);
 
     // set box dimensions
-    double boxRadius_ = 0.;
-    switch (sp_->simControl.geometryType) {
-      case simControlStruct::geometryEnum::roundWall:
-      boxRadius_ = read0DFile(dirName + "boxSize.dat");
-      sp_->setBoxRadius(boxRadius_);
-      boxRadius_ = sp_->getBoxRadius();
-      if(nDim_ == 2) {
-        cout << "FileIO::readParticlePackingFromDirectory: phi: " << sp_->getParticlePhi() << " boxRadius: " << boxRadius_ << endl;
-      }
-      break;
-      default:
-      std::vector<double> boxSize_(nDim_);
-      boxSize_ = read1DFile(dirName + "boxSize.dat", nDim_);
-      sp_->setBoxSize(boxSize_);
-      boxSize_ = sp_->getBoxSize();
-      if(nDim_ == 2) {
-        cout << "FileIO::readParticlePackingFromDirectory: phi: " << sp_->getParticlePhi() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << endl;
-      } else if(nDim_ == 3) {
-        cout << "FileIO::readParticlePackingFromDirectory: phi: " << sp_->getParticlePhi() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << ", Lz: " << boxSize_[2] << endl;
-      }
-      break;
-    }
-    // set length scales
-    sp_->setLengthScaleToOne();
-  }
-
-  void readPBCParticlePackingFromDirectory(string dirName, long numParticles_, long nDim_) {
     std::vector<double> boxSize_(nDim_);
-    std::vector<double> pPos_(numParticles_ * nDim_);
-    std::vector<double> pRad_(numParticles_);
-
     boxSize_ = read1DFile(dirName + "boxSize.dat", nDim_);
     sp_->setBoxSize(boxSize_);
+    boxSize_ = sp_->getBoxSize();
     if(nDim_ == 2) {
-      pPos_ = read2DFile(dirName + "particlePos.dat", numParticles_);
+      cout << "FileIO::readPackingFromDirectory: phi: " << sp_->getPackingFraction() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << endl;
     } else if(nDim_ == 3) {
-      pPos_ = read3DFile(dirName + "particlePos.dat", numParticles_);
+      cout << "FileIO::readPackingFromDirectory: phi: " << sp_->getPackingFraction() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << ", Lz: " << boxSize_[2] << endl;
+    }
+  }
+
+  void readPBCPackingFromDirectory(string dirName, long numParticles_, long nDim_) {
+    std::vector<double> pPos_(numParticles_ * nDim_);
+    std::vector<double> pRad_(numParticles_);
+    if(nDim_ == 2) {
+      pPos_ = read2DFile(dirName + "pos.dat", numParticles_);
+    } else if(nDim_ == 3) {
+      pPos_ = read3DFile(dirName + "pos.dat", numParticles_);
     } else {
       cout << "FileIO::readPBCParticlePackingFromDirectory: only dimensions 2 and 3 are allowed!" << endl;
     }
-    sp_->setPBCParticlePositions(pPos_);
-    pRad_ = read1DFile(dirName + "particleRad.dat", numParticles_);
-    sp_->setParticleRadii(pRad_);
-    // set length scales
-    sp_->setLengthScaleToOne();
+    sp_->setPBCPositions(pPos_);
+    pRad_ = read1DFile(dirName + "rad.dat", numParticles_);
+    sp_->setRadii(pRad_);
+    
+    // set box dimensions
+    std::vector<double> boxSize_(nDim_);
+    boxSize_ = read1DFile(dirName + "boxSize.dat", nDim_);
+    sp_->setBoxSize(boxSize_);
+    boxSize_ = sp_->getBoxSize();
     if(nDim_ == 2) {
-      cout << "FileIO::readPBCParticlePackingFromDirectory: phi: " << sp_->getParticlePhi() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << endl;
+      cout << "FileIO::readPBCPackingFromDirectory: phi: " << sp_->getPackingFraction() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << endl;
     } else if(nDim_ == 3) {
-      cout << "FileIO::readPBCParticlePackingFromDirectory: phi: " << sp_->getParticlePhi() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << ", Lz: " << boxSize_[2] << endl;
+      cout << "FileIO::readPBCPackingFromDirectory: phi: " << sp_->getPackingFraction() << " box-Lx: " << boxSize_[0] << ", Ly: " << boxSize_[1] << ", Lz: " << boxSize_[2] << endl;
     }
   }
 
-  void saveAthermalParticlePacking(string dirName) {
-    // save scalars
-    string fileParams = dirName + "params.dat";
-    ofstream saveParams(fileParams.c_str());
-    openOutputFile(fileParams);
-    saveParams << "numParticles" << "\t" << sp_->getNumParticles() << endl;
-    saveParams << "dt" << "\t" << sp_->dt << endl;
-    saveParams << "phi" << "\t" << sp_->getParticlePhi() << endl;
-    saveParams << "energy" << "\t" << sp_->getParticlePotentialEnergy() / sp_->getNumParticles() << endl;
-    saveParams << "pressure" << "\t" << sp_->getParticlePressure() << endl;
-    saveParams.close();
-    // save vectors
-    save1DFile(dirName + "boxSize.dat", sp_->getBoxSize());
-    save1DFile(dirName + "particleRad.dat", sp_->getParticleRadii());
-    save2DFile(dirName + "particlePos.dat", sp_->getParticlePositions(), sp_->nDim);
-    sp_->calcParticleContacts(0.);
-    save2DFile(dirName + "particleContacts.dat", sp_->getContacts(), sp_->contactLimit);
-  }
-
-  void saveWallParams(string dirName) {
-    string fileParams = dirName + "wallParams.dat";
-    ofstream saveParams(fileParams.c_str());
-    openOutputFile(fileParams);
-    long numWall = sp_->getNumWall();
-    saveParams << "numWall" << "\t" << numWall << endl;
-    double wallRad = sp_->getWallRad();
-    saveParams << "wallRad" << "\t" << wallRad << endl;
-    double wallArea0 = sp_->getWallArea0();
-    saveParams << "wallArea0" << "\t" << wallArea0 << endl;
-    saveParams.close();
-  }
-
-  void saveWall(string dirName) {
-    save2DFile(dirName + "wallPos.dat", sp_->getWallPositions(), sp_->nDim);
-    switch (sp_->simControl.boundaryType) {
-      case simControlStruct::boundaryEnum::mobile:
-      save1DFile(dirName + "wallLengths.dat", sp_->getWallLengths());
-      save1DFile(dirName + "wallAngles.dat", sp_->getWallAngles());
-      save2DFile(dirName + "wallVel.dat", sp_->getWallVelocities(), sp_->nDim);
-      break;
-      default:
-      break;
-    }
-  }
-
-  void savePackingParams(string dirName) {
+  void saveParams(string dirName) {
     string fileParams = dirName + "params.dat";
     ofstream saveParams(fileParams.c_str());
     openOutputFile(fileParams);
     long numParticles = sp_->getNumParticles();
     saveParams << "numParticles" << "\t" << numParticles << endl;
     saveParams << "nDim" << "\t" << sp_->getNDim() << endl;
-    saveParams << "sigma" << "\t" << 2 * sp_->getMeanParticleSigma() << endl;
+    saveParams << "sigma" << "\t" << 2 * sp_->getMeanParticleSize() << endl;
     saveParams << "epsilon" << "\t" << sp_->getEnergyCostant() << endl;
-    saveParams << "dt" << "\t" << sp_->dt << endl;
-    saveParams << "phi" << "\t" << sp_->getParticlePhi() << endl;
-    saveParams << "energy" << "\t" << sp_->getParticleEnergy() / numParticles << endl;
-    saveParams << "temperature" << "\t" << sp_->getParticleTemperature() << endl;
-    long num1 = sp_->getTypeNumParticles();
-    if(num1 != numParticles) {
-      saveParams << "num1" << "\t" << sp_->getTypeNumParticles() << endl;
+    saveParams << "dt" << "\t" << sp_->getTimeStep() << endl;
+    saveParams << "phi" << "\t" << sp_->getPackingFraction() << endl;
+    saveParams << "energy" << "\t" << sp_->getEnergy() / numParticles << endl;
+    saveParams << "temperature" << "\t" << sp_->getTemperature() << endl;
+    long numA = sp_->getTypeNumParticles();
+    if(numA != numParticles) {
+      saveParams << "numA" << "\t" << sp_->getTypeNumParticles() << endl;
     }
     saveParams.close();
   }
 
-  void saveParticlePacking(string dirName) {
-    savePackingParams(dirName);
-    // save vectors
-    double boxRadius_ = 0.;
-    long nDim = sp_->getNDim();
-    switch (sp_->simControl.geometryType) {
-      case simControlStruct::geometryEnum::roundWall:
-      boxRadius_ = sp_->getBoxRadius();
-      save0DFile(dirName + "boxSize.dat", boxRadius_);
-      break;
-      default:
-      save1DFile(dirName + "boxSize.dat", sp_->getBoxSize());
-      break;
-    }
-    save1DFile(dirName + "particleRad.dat", sp_->getParticleRadii());
-    save2DFile(dirName + "particlePos.dat", sp_->getParticlePositions(), nDim);
-    save2DFile(dirName + "particleVel.dat", sp_->getParticleVelocities(), nDim);
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::active || sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
-      if(nDim == 2) {
-        save1DFile(dirName + "particleAngles.dat", sp_->getParticleAngles());
-      } else if(nDim == 3) {
-        save2DFile(dirName + "particleAngles.dat", sp_->getParticleAngles(), nDim);
-      } else {
-        cout << "FileIO::saveParticlePacking: only dimensions 2 and 3 are allowed for particleAngles!" << endl;
-      }
-    }
-    if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::rigid || sp_->simControl.boundaryType == simControlStruct::boundaryEnum::mobile) {
-      saveWallParams(dirName);
-      saveWall(dirName);
-      if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::rigid) {
-        saveWallDynamics(dirName);
-      }
-    }
-  }
-
-  void savePBCParticlePacking(string dirName) {
-   savePackingParams(dirName);
+  void savePacking(string dirName) {
+    saveParams(dirName);
     // save vectors
     long nDim = sp_->getNDim();
     save1DFile(dirName + "boxSize.dat", sp_->getBoxSize());
-    save1DFile(dirName + "particleRad.dat", sp_->getParticleRadii());
-    save2DFile(dirName + "particlePos.dat", sp_->getPBCParticlePositions(), nDim);
-    save2DFile(dirName + "particleVel.dat", sp_->getParticleVelocities(), nDim);
-  }
-
-  void readParticleVelocity(string dirName, long numParticles_, long nDim_) {
-    std::vector<double> particleVel_(numParticles_ * nDim_);
-    if(nDim_ == 2) {
-      particleVel_ = read2DFile(dirName + "particleVel.dat", numParticles_);
-    } else if(nDim_ == 3) {
-      particleVel_ = read3DFile(dirName + "particleVel.dat", numParticles_);
-    } else {
-      cout << "FileIO::readParticleVelocity: only dimensions 2 and 3 are allowed!" << endl;
+    save1DFile(dirName + "rad.dat", sp_->getRadii());
+    save2DFile(dirName + "pos.dat", sp_->getPositions(), nDim);
+    save2DFile(dirName + "vel.dat", sp_->getVelocities(), nDim);
+    if(sp_->simControl.particleType == simControlStruct::particleEnum::active || sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
+      if(nDim == 2) {
+        save1DFile(dirName + "angles.dat", sp_->getAngles());
+      } else if(nDim == 3) {
+        save2DFile(dirName + "angles.dat", sp_->getAngles(), nDim);
+      } else {
+        cout << "FileIO::savePacking: only dimensions 2 and 3 are allowed for angles!" << endl;
+      }
     }
-    sp_->setParticleVelocities(particleVel_);
   }
 
-  void readParticleState(string dirName, long numParticles_, long nDim_, bool initAngles = false, bool initWall = false) {
-    readParticleVelocity(dirName, numParticles_, nDim_);
+  void savePBCPacking(string dirName) {
+   saveParams(dirName);
+    // save vectors
+    long nDim = sp_->getNDim();
+    save1DFile(dirName + "boxSize.dat", sp_->getBoxSize());
+    save1DFile(dirName + "rad.dat", sp_->getRadii());
+    save2DFile(dirName + "pos.dat", sp_->getPBCPositions(), nDim);
+    save2DFile(dirName + "vel.dat", sp_->getVelocities(), nDim);
+    if(sp_->simControl.particleType == simControlStruct::particleEnum::active || sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
+      if(nDim == 2) {
+        save1DFile(dirName + "angles.dat", sp_->getAngles());
+      } else if(nDim == 3) {
+        save2DFile(dirName + "angles.dat", sp_->getAngles(), nDim);
+      } else {
+        cout << "FileIO::savePacking: only dimensions 2 and 3 are allowed for angles!" << endl;
+      }
+    }
+  }
+
+  void readVelocity(string dirName, long numParticles_, long nDim_) {
+    std::vector<double> vel_(numParticles_ * nDim_);
+    if(nDim_ == 2) {
+      vel_ = read2DFile(dirName + "vel.dat", numParticles_);
+    } else if(nDim_ == 3) {
+      vel_ = read3DFile(dirName + "vel.dat", numParticles_);
+    } else {
+      cout << "FileIO::readVelocity: only dimensions 2 and 3 are allowed!" << endl;
+    }
+    sp_->setVelocities(vel_);
+  }
+
+  void readState(string dirName, long numParticles_, long nDim_, bool initAngles = false) {
+    readVelocity(dirName, numParticles_, nDim_);
     if(initAngles == false) {
       if(sp_->simControl.particleType == simControlStruct::particleEnum::active || sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
-        std::vector<double> particleAngle_(numParticles_);
+        std::vector<double> angle_(numParticles_);
         if(nDim_ == 2) {
-          particleAngle_ = read1DFile(dirName + "particleAngles.dat", numParticles_);
+          angle_ = read1DFile(dirName + "angles.dat", numParticles_);
         } else if(nDim_ == 3) {
-          particleAngle_.resize(numParticles_ * nDim_);
-          particleAngle_ = read3DFile(dirName + "particleAngles.dat", numParticles_);
+          angle_.resize(numParticles_ * nDim_);
+          angle_ = read3DFile(dirName + "angles.dat", numParticles_);
         } else {
-          cout << "FileIO::readParticleState: only dimensions 2 and 3 are allowed for particleAngles!" << endl;
+          cout << "FileIO::readState: only dimensions 2 and 3 are allowed for angles!" << endl;
         }
-        sp_->setParticleAngles(particleAngle_);
+        sp_->setAngles(angle_);
       }
     }
-    if(initWall == false) {
-      if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::rigid || sp_->simControl.boundaryType == simControlStruct::boundaryEnum::mobile) {
-        readWall(dirName, nDim_);
-      }
-    }
-  }
-
-  void saveWallDynamics(string dirName) {
-    string fileParams = dirName + "wallDynamics.dat";
-    ofstream saveParams(fileParams.c_str());
-    openOutputFile(fileParams);
-    std::tuple<double, double, double> angleDyn = sp_->getWallAngleDynamics();
-    saveParams << get<0>(angleDyn) << endl;
-    saveParams << get<1>(angleDyn) << endl;
-    saveParams << get<2>(angleDyn) << endl;
-    saveParams.close();
   }
 
   void saveParticleState(string dirName) {
-    save2DFile(dirName + "particlePos.dat", sp_->getParticlePositions(), sp_->nDim);
-    save2DFile(dirName + "particleVel.dat", sp_->getParticleVelocities(), sp_->nDim);
-    if(sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
-      //save2DFile(dirName + "particleForce.dat", sp_->getParticleForces(), sp_->nDim);
+    save2DFile(dirName + "pos.dat", sp_->getPositions(), sp_->nDim);
+    save2DFile(dirName + "vel.dat", sp_->getVelocities(), sp_->nDim);
+    if(sp_->simControl.particleType == simControlStruct::particleEnum::active || sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
       if(sp_->nDim == 2) {
-        save1DFile(dirName + "particleAngles.dat", sp_->getParticleAngles());
+        save1DFile(dirName + "angles.dat", sp_->getAngles());
       } else {
-        save2DFile(dirName + "particleAngles.dat", sp_->getParticleAngles(), sp_->nDim);
-      }
-    }
-    if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::rigid || sp_->simControl.boundaryType == simControlStruct::boundaryEnum::mobile)  {
-      saveWall(dirName);
-      if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::rigid) {
-        saveWallDynamics(dirName);
+        save2DFile(dirName + "angles.dat", sp_->getAngles(), sp_->nDim);
       }
     }
   }
 
-  void saveParticleEnergies(string dirName) {
-    save1DFile(dirName + "particleEnergies.dat", sp_->getParticleEnergies());
-  }
-
-  void saveParticleContacts(string dirName) {
-    sp_->calcParticleContacts(0.);
-    save2DFile(dirName + "particleContacts.dat", sp_->getContacts(), sp_->contactLimit);
-  }
-
-  void saveParticleNeighbors(string dirName) {
+  void saveNeighbors(string dirName) {
     if(sp_->simControl.neighborType == simControlStruct::neighborEnum::neighbor) {
-      save2DIndexFile(dirName + "particleNeighbors.dat", sp_->getParticleNeighbors(), sp_->partNeighborListSize);
-      if(sp_->simControl.boundaryType == simControlStruct::boundaryEnum::rigid || sp_->simControl.boundaryType == simControlStruct::boundaryEnum::mobile) {
-        save2DIndexFile(dirName + "wallNeighbors.dat", sp_->getWallNeighbors(), sp_->wallNeighborListSize);
-        save2DFile(dirName + "wallForce.dat", sp_->getWallForces(), sp_->nDim);
-      }
+      save2DIndexFile(dirName + "neighbors.dat", sp_->getNeighbors(), sp_->neighborListSize);
     }
-    //if(sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
-    //  save2DIndexFile(dirName + "vicsekNeighbors.dat", sp_->getVicsekNeighbors(), sp_->vicsekNeighborListSize);
-    //}
   }
 
-  void saveLangevinParams(string dirName, double damping) {
+  void saveVicsekNeighbors(string dirName) {
+    if(sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
+      save2DIndexFile(dirName + "vicsekNeighbors.dat", sp_->getVicsekNeighbors(), sp_->vicsekNeighborListSize);
+    }
+  }
+
+  void saveDynamicsParams(string dirName, double damping) {
     string fileParams = dirName + "dynParams.dat";
     ofstream saveParams(fileParams.c_str());
     openOutputFile(fileParams);
@@ -934,75 +434,10 @@ public:
     }
   }
 
-  void saveDoubleNoseHooverParams(string dirName) {
-    double mass, damping1, damping2;
-    sp_->getDoubleNoseHooverParams(mass, damping1, damping2);
-    string fileParams = dirName + "nhParams.dat";
-    ofstream saveParams(fileParams.c_str());
-    openOutputFile(fileParams);
-    saveParams << "mass" << "\t" << mass << endl;
-    saveParams << "damping1" << "\t" << damping1 << endl;
-    saveParams << "damping2" << "\t" << damping2 << endl;
-    saveParams.close();
-  }
-
-  void readDoubleNoseHooverParams(string dirName, double &mass, double &damping1, double &damping2) {
-    string fileParams = dirName + "nhParams.dat";
-    ifstream readParams(fileParams.c_str());
-    if (!readParams.is_open()) {
-      cout << "Error: Unable to open file " << fileParams << " - setting default values" << endl;
-      return;
-    }
-    string paramName;
-    double paramValue;
-    while (readParams >> paramName >> paramValue) {
-      if(paramName == "mass") {
-        mass = paramValue;
-      } else if(paramName == "damping1") {
-        damping1 = paramValue;
-      } else if(paramName == "damping2") {
-        damping2 = paramValue;
-      }
-    }
-    readParams.close();
-    if(mass == 1 && damping1 == 1 && damping2 == 1) {
-      cout << "FileIO::saveDoubleNoseHooverParams: mass and damping are not saved in nhParams.dat! Setting mass, damping1 and damping2 to 1" << endl;
-    }
-  }
-
-  void saveFlowParams(string dirName, double sigma, double damping, double gravity, double viscosity, double ew) {
-    string fileParams = dirName + "flowParams.dat";
-    ofstream saveParams(fileParams.c_str());
-    openOutputFile(fileParams);
-    saveParams << "sigma" << "\t" << sigma << endl;
-    saveParams << "damping" << "\t" << damping << endl;
-    saveParams << "gravity" << "\t" << gravity << endl;
-    saveParams << "viscosity" << "\t" << viscosity << endl;
-    saveParams << "ew" << "\t" << ew << endl;
-    saveParams.close();
-  }
-
-  void saveXYZPacking(string dirName, long numParticles_, long nDim_) {
-    std::vector<double> pos(numParticles_ * nDim_), rad(numParticles_);
-    pos = sp_->getPBCParticlePositions();
-    rad = sp_->getParticleRadii();
-    long numCols = nDim_;
-    this->openOutputFile(dirName + "packing.xyz");
-    long numRows = int(pos.size()/numCols);
-    outputFile << numParticles_ << "\n\n";
-    for (long row = 0; row < numRows; row++) {
-      for(long col = 0; col < numCols; col++) {
-        outputFile << setprecision(precision) << pos[row * numCols + col] << "\t";
-      }
-      outputFile << rad[row * numCols + numCols] << endl;
-    }
-    outputFile.close();
-  }
-
   void saveDumpPacking(string dirName, long numParticles_, long nDim_, long timeStep_) {
     std::vector<double> pos(numParticles_ * nDim_), rad(numParticles_), boxSize(nDim_);
-    pos = sp_->getPBCParticlePositions();
-    rad = sp_->getParticleRadii();
+    pos = sp_->getPBCPositions();
+    rad = sp_->getRadii();
     boxSize = sp_->getBoxSize();
     this->openOutputFile(dirName + "packing.dump");
     outputFile << "ITEM: TIMESTEP" << endl;
@@ -1024,7 +459,7 @@ public:
     }
     int type = 1;
     for (long particleId = 0; particleId < numParticles_; particleId++) {
-      if(particleId < sp_->num1) {
+      if(particleId < sp_->numA) {
         type = 1;
       } else {
         type = 2;
@@ -1042,4 +477,4 @@ public:
 
 };
 
-#endif // FILEIO_H //
+#endif /* FILEIO_H */

@@ -41,7 +41,7 @@ EXE = compress
 #EXE = runNVT
 
 # testing
-#EXE = testInteraction
+#EXE = test
 
 # Object files:
 OBJS = $(OBJ_DIR)/$(EXE).o $(OBJ_DIR)/simSoft.o $(OBJ_DIR)/FIRE.o
@@ -50,10 +50,6 @@ OBJS = $(OBJ_DIR)/$(EXE).o $(OBJ_DIR)/simSoft.o $(OBJ_DIR)/FIRE.o
 
 ## Compile ##
 
-# Ensure bin directory exists
-$(OBJ_DIR):
-	mkdir -p $(OBJ_DIR)
-	
 # Link C++ compiled object files to target executable:
 $(EXE) : $(OBJS)
 	$(CC) $(OBJS) -o $@ $(CC_LIBS)
