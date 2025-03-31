@@ -166,6 +166,29 @@ def plotPacking(dirName, figureName, quiver=False, lj=False, shiftx=0, shifty=0,
     plt.savefig(figureName, transparent=False)
     plt.show()
 
+########################## check energy conservation ##########################
+def plotEnergy(dirName, figureName):
+    if(os.path.exists(dirName + os.sep + "energy.dat")):
+        energy = np.loadtxt(dirName + os.sep + "energy.dat")
+        print("potential energy:", np.mean(energy[:,2]), "+-", np.std(energy[:,2]), "  std/mean:", np.std(energy[:,2])/np.abs(np.mean(energy[:,2])))
+        print("temperature:", np.mean(energy[:,3]), "+-", np.std(energy[:,3]), "  std/mean:", np.std(energy[:,3])/np.abs(np.mean(energy[:,3])))
+        fig, ax = plt.subplots(figsize=(6,4.5), dpi = 120)
+        ax.plot(energy[:,0], energy[:,2], linewidth=1.5, color='k', linestyle='solid', label="$U$")
+        ax.plot(energy[:,0], energy[:,3], linewidth=1.5, color='r', linestyle='dashed', label="$K$")
+        ax.plot(energy[:,0], energy[:,4], linewidth=4, color='b', linestyle='solid', alpha=0.3)
+        ax.plot(energy[:,0], energy[:,4], linewidth=1.5, color='b', linestyle='dotted', label="$E$")
+        ax.set_ylabel("$Energy$", fontsize=16)
+        print("\ntotal energy per particle:", np.mean(energy[:,4]), "+-", np.std(energy[:,4]), "  std/mean:", np.std(energy[:,4])/np.abs(np.mean(energy[:,4])))
+        ax.tick_params(axis='both', labelsize=14)
+        ax.set_xlabel("$Simulation$ $step$", fontsize=16)
+        ax.legend(fontsize=12, loc='upper left')
+        plt.tight_layout()
+        figureName = "/home/francesco/Pictures/soft/energy-" + figureName
+        fig.savefig(figureName + ".png", transparent=True, format = "png")
+        plt.show()
+    else:
+        print("no energy.dat file was found in", dirName)
+
 # Main script with plotting options
 if __name__ == '__main__':
     dirName = sys.argv[1]
@@ -183,6 +206,21 @@ if __name__ == '__main__':
 
     elif(whichPlot == 'plotljvel'):
         plotPacking(dirName, figureName, quiver=True, lj=True, shiftx=float(sys.argv[4]), shifty=float(sys.argv[5]))
+
+    elif(whichPlot == 'plot2'):
+        plotPacking(dirName, figureName, double=True, numA=int(sys.argv[4]), shiftx=float(sys.argv[5]), shifty=float(sys.argv[6]))
+
+    elif(whichPlot == 'plot2vel'):
+        plotPacking(dirName, figureName, double=True, numA=int(sys.argv[4]), quiver=True, shiftx=float(sys.argv[5]), shifty=float(sys.argv[6]))
+
+    elif(whichPlot == 'plot2lj'):
+        plotPacking(dirName, figureName, double=True, lj=True, numA=int(sys.argv[4]), shiftx=float(sys.argv[5]), shifty=float(sys.argv[6]))
+
+    elif(whichPlot == 'plot2ljvel'):
+        plotPacking(dirName, figureName, double=True, lj=True, numA=int(sys.argv[4]), quiver=True, shiftx=float(sys.argv[5]), shifty=float(sys.argv[6]))
+
+    elif(whichPlot == 'energy'):
+        plotEnergy(dirName, figureName)
 
     else:
         print('Please specify the type of plot you want')

@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
   // boolean variables for simulation setup
   bool read = false, readState = false, nve = true, noseHoover = false;
   // boolean variables for potential type and force calculation
-  bool lj = false, wca = true, alltoall = false;
+  bool lj = false, wca = false, alltoall = false;
   // input variables
   long numParticles = atol(argv[2]), nDim = atol(argv[3]);
   double dt = atof(argv[4]), Tinject = atof(argv[5]), lx = atof(argv[6]), ly = atof(argv[7]), lz;
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
         if(sp.simControl.neighborType == simControlStruct::neighborEnum::neighbor) {
           updateCount = sp.getUpdateCount();
           if(step != 0 && updateCount > 0) {
-            cout << " number of updates: " << updateCount << " frequency " << printFreq / updateCount << endl;
+            cout << " number of updates: " << updateCount << endl;
           } else {
             cout << " no updates" << endl;
           }
@@ -195,6 +195,7 @@ int main(int argc, char **argv) {
 
     // Save equilibrated configuration
     ioSP.savePacking(currentDir);
+    ioSP.saveNeighbors(currentDir);
     ioSP.closeEnergyFile();
 
     // Check if target density is met
