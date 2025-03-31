@@ -31,7 +31,9 @@ int main(int argc, char **argv) {
   bool lj = false, wca = true, alltoall = false;
   // input variables
   long numParticles = atol(argv[2]), nDim = atol(argv[3]);
-  double dt = atof(argv[4]), Tinject = atof(argv[5]), lx = atof(argv[6]), ly = atof(argv[7]), lz = atof(argv[8]);
+  double dt = atof(argv[4]), Tinject = atof(argv[5]), lx = atof(argv[6]), ly = atof(argv[7]), lz;
+  if(nDim == 3) lz = atof(argv[8]);
+  else lz = 0;
   // minimizer variables
   long iteration = 0, maxIterations = 1e05, minStep = 20, numStep = 0;
   double FIREStep = 1e-02, forceTollerance = 1e-08;
@@ -40,12 +42,10 @@ int main(int argc, char **argv) {
   long printFreq = int(maxStep / 10), updateCount = 0, saveEnergyFreq = int(printFreq / 10);
   double previousPhi, currentPhi, scaleFactor, prevEnergy = 0, deltaPhi = 1e-02, phi0 = 0.01, phiTh = 0.72;
   // other variables
-  double poly = 0.2, LJcut = 4, ec = 1, cutoff = 0.5, mass = 1, damping = 1;
+  double LJcut = 4, poly = 0.2, ec = 1, cutoff = 0.5, mass = 1, damping = 1;
+  if(nDim == 3) LJcut = 2.5;
   double size, cutDistance, timeStep, timeUnit, sigma;
   long num1 = int(numParticles / 2);
-  if(nDim == 3) {
-    LJcut = 2.5;
-  }
   std::string currentDir, outDir = argv[1], inDir, energyFile;
   std::vector<double> boxSize(nDim);
   // FIRE minimizer paramaters: a_start, f_dec, f_inc, f_a, dt, dt_max, a

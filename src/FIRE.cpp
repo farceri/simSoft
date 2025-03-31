@@ -5,7 +5,7 @@
 // FUNCTIONS FOR FIRE CLASS
 
 #include "../include/FIRE.h"
-#include "../include/simSoft.h"
+#include "../include/defs.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -86,11 +86,11 @@ void FIRE::updateVelocity() {
 void FIRE::bendVelocityTowardsForce() {
 	double velNormSquared = 0., forceNormSquared = 0.;
 	// get the dot product between the velocity and the force
-	double vDotF = double(std::inner_product(sp_->d_vel.begin(), sp_->d_vel.end(), sp_->d_force.begin(), double(0)));
+	double vDotF = double(std::inner_product(sp_->vel.begin(), sp_->vel.end(), sp_->force.begin(), double(0)));
 	//cout << "FIRE::bendVelocityTowardsForceFIRE: vDotF = " << setprecision(precision) << vDotF << endl;
 	if (vDotF < 0) {
 		// if vDotF is negative, then we are going uphill, so let's stop and reset
-		std::fill(sp_->d_vel.begin(), sp_->d_vel.end(), double(0));
+		std::fill(sp_->vel.begin(), sp_->vel.end(), double(0));
 		numStep = 0;
 		fire_dt = std::max(fire_dt * f_dec, fire_dt_max / 10); // go to a shorter dt
 		a = a_start; // start fresh with a more radical mixing between force and velocity
@@ -100,15 +100,15 @@ void FIRE::bendVelocityTowardsForce() {
 		a *= f_a; // increase the inertia
 	}
 	// calculate the ratio of the norm squared of the velocity and the force
-  std::transform(sp_->d_vel.begin(), sp_->d_vel.end(), d_velSquared.begin(), square());
-  std::transform(sp_->d_force.begin(), sp_->d_force.end(), d_forceSquared.begin(), square());
+  std::transform(sp_->vel.begin(), sp_->vel.end(), velSquared.begin(), square());
+  std::transform(sp_->force.begin(), sp_->force.end(), forceSquared.begin(), square());
 	velNormSquared = std::reduce(velSquared.begin(), velSquared.end(), double(0), std::plus<double>());
 	forceNormSquared = std::reduce(forceSquared.begin(), forceSquared.end(), double(0), std::plus<double>());
 	// check FIRE convergence
 	if (forceNormSquared == 0) {
 		// if the forceNormSq is zero, then there is no force and we are done, so zero out the velocity
 		cout << "FIRE::bendVelocityTowardsForceFIRE: forceNormSquared is zero" << endl;
-		std::fill(sp_->d_vel.begin(), sp_->d_vel.end(), double(0));
+		std::fill(sp_->vel.begin(), sp_->vel.end(), double(0));
 	} else {
 		double velForceNormRatio = sqrt(velNormSquared / forceNormSquared);
 		double func_a(a);
@@ -125,10 +125,10 @@ void FIRE::bendVelocityTowardsForce() {
 
 // set the mass for each degree of freedom
 void FIRE::setMass() {
-	d_mass.resize(sp_->numParticles * sp_->nDim);
+	mass.resize(sp_->numParticles * sp_->nDim);
 	for (long pId = 0; pId < sp_->numParticles; pId++) {
 		for (long dim = 0; dim < sp_->nDim; dim++) {
-			mass[pId * sp_->nDim + dim] = PI / (sp_->d_rad[pId] * sp_->d_rad[pId]);
+			mass[pId * sp_->nDim + dim] = PI / (sp_->rad[pId] * sp_->rad[pId]);
 		}
 	}
 }

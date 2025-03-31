@@ -5,14 +5,15 @@
 // FUNCTION DECLARATIONS
 
 #include "../include/simSoft.h"
-#include "../include/defs.h"
 #include "../include/Integrator.h"
 #include "../include/FIRE.h"
+#include "../include/defs.h"
 #include <iostream>
 #include <string>
 #include <vector>
 #include <numeric>
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <random>
 #include <time.h>
@@ -427,20 +428,20 @@ void simSoft::setBiRandomParticles(double phi0, double lx, double ly, double lz)
 }
 
 void simSoft::scaleParticles(double scale) {
-  std::transform(rad.begin(), rad.end(), rad.begin(), [](double x) { return x * scale; });
+  std::transform(rad.begin(), rad.end(), rad.begin(), [scale](double x) { return x * scale; });
 }
 
 void simSoft::scalePacking() {
   double sigma = getMeanParticleSize();
-  std::transform(rad.begin(), rad.end(), rad.begin(), [](double x) { return x / sigma; });
-  std::transform(pos.begin(), pos.end(), pos.begin(), [](double x) { return x / sigma; });
+  std::transform(rad.begin(), rad.end(), rad.begin(), [sigma](double x) { return x / sigma; });
+  std::transform(pos.begin(), pos.end(), pos.begin(), [sigma](double x) { return x / sigma; });
   for (long dim = 0; dim < nDim; dim++) {
     boxSize[dim] /= sigma;
   }
 }
 
 void simSoft::scaleVelocities(double scale) {
-  std::transform(vel.begin(), vel.end(), vel.begin(), [](double x) { return x * scale; });
+  std::transform(vel.begin(), vel.end(), vel.begin(), [scale](double x) { return x * scale; });
 }
 
 // compute particle angles from velocity
@@ -566,7 +567,7 @@ void simSoft::addSelfPropulsion() {
   double *pAngle = angle.data();
   double *pForce = force.data();
 	if(nDim == 2) {
-    wrappedGaussNum generateWrappedNumbers(-PI, PI);
+    wrappedGaussNum generateWrappedNumbers(0.f, amplitude);
     std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateWrappedNumbers(0);});
     double *pRandAngle = randAngle.data();
 
@@ -585,8 +586,8 @@ void simSoft::addSelfPropulsion() {
 
 
   } else if(nDim == 3) {
-    randNum generateGaussNumbers(-PI, PI);
-    std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateGaussNumbers(0);});
+    randNum generateRandNumbers(-PI, PI);
+    std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateRandNumbers(0);});
     double *pRandAngle = randAngle.data();
 
     auto normalizeVector = [&](long pId) {
@@ -628,7 +629,7 @@ void simSoft::addVicsekAlignment() {
     if(taup != 0) {
       amplitude = sqrt(2.0 * dt / taup);
     }
-    wrappedGaussNum generateWrappedNumbers(-PI, PI);
+    wrappedGaussNum generateWrappedNumbers(0.f, amplitude);
     std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateWrappedNumbers(0);});
     const double *pAlpha = alpha.data();
     double *pRandAngle = randAngle.data();
@@ -972,7 +973,7 @@ void simSoft::calcForceEnergy() {
 double simSoft::getMaxUnbalancedForce() {
   std::vector<double> forceSquared(force.size());
   std::transform(force.begin(), force.end(), forceSquared.begin(), square());
-  double maxUnbalancedForce = sqrt(std::reduce(forceSquared.begin(), forceSquared.end(), double(-1), std::max<double>()));
+  double maxUnbalancedForce = sqrt(std::reduce(forceSquared.begin(), forceSquared.end(), std::numeric_limits<double>::lowest(), maximum()));
   forceSquared.clear();
   return maxUnbalancedForce;
 }
@@ -1178,7 +1179,7 @@ void simSoft::calcNeighborList() {
 
   fillNeighborList();
   // compute maximum number of neighbors per particle
-  maxNeighbors = std::reduce(maxNeighborList.begin(), maxNeighborList.end(), -1L, std::max<long>());
+  maxNeighbors = std::reduce(maxNeighborList.begin(), maxNeighborList.end(), std::numeric_limits<long>::lowest(), maximum());
   //cout << "simSoft::calcNeighborList: maxNeighbors: " << partMaxNeighbors << endl;
 
   // if the neighbors don't fit, resize the neighbor list
@@ -1223,7 +1224,7 @@ void simSoft::calcVicsekNeighborList() {
 
   fillVicsekNeighborList();
   // compute maximum number of neighbors per particle
-  vicsekMaxNeighbors = std::reduce(vicsekMaxNeighborList.begin(), vicsekMaxNeighborList.end(), -1L, std::max<long>());
+  vicsekMaxNeighbors = std::reduce(vicsekMaxNeighborList.begin(), vicsekMaxNeighborList.end(), std::numeric_limits<long>::lowest(), maximum());
   //cout << "simSoft::calcVicsekNeighborList: vicsekMaxNeighbors: " << vicsekMaxNeighbors << endl;
 
   // if the neighbors don't fit, resize the neighbor list
@@ -1270,40 +1271,42 @@ void simSoft::FIRELoop() {
 
 //***************************** Langevin integrators ******************************//
 void simSoft::initSoftLangevin(double Temp, double gamma, bool readState) {
-  this->sim_ = new SoftLangevin(this, Integrator(Temp));
-  this->sim_->gamma = gamma;
-  this->sim_->noise = sqrt(2. * Temp * gamma / dt);
-  this->sim_->rand.resize(numParticles * nDim);
-  std::fill(this->sim_->rand.begin(), this->sim_->rand.end(), double(0));
+  this->int_ = new Integrator(this);
+  this->int_->temp = Temp;
+  this->int_->gamma = gamma;
+  this->int_->noise = sqrt(2. * Temp * gamma / dt);
+  this->int_->rand.resize(numParticles * nDim);
+  std::fill(this->int_->rand.begin(), this->int_->rand.end(), double(0));
   resetLastPositions();
   setInitialPositions();
   if(readState == false) {
-    this->sim_->injectKineticEnergy();
+    this->int_->injectKineticEnergy();
   }
   cout << "simSoft::initSoftLangevin:: current temperature: " << setprecision(12) << getTemperature() << endl;
 }
 
 void simSoft::softLangevinLoop(bool conserve) {
-  this->sim_->integrate();
+  this->int_->integrateLangevin();
   if(conserve == true) {
-    this->sim_->conserveMomentum();
+    this->int_->conserveMomentum();
   }
 }
 
 //***************************** NVE integrator *******************************//
 void simSoft::initSoftNVE(double Temp, bool readState) {
-  this->sim_ = new SoftNVE(this, Integrator(Temp));
+  this->int_ = new Integrator(this);
+  this->int_->temp = Temp;
   resetLastPositions();
   setInitialPositions();
   shift = true;
   if(readState == false) {
-    this->sim_->injectKineticEnergy();
+    this->int_->injectKineticEnergy();
   }
   cout << "simSoft::initSoftNVE:: current temperature: " << setprecision(12) << getTemperature() << endl;
 }
 
 void simSoft::softNVELoop() {
-  this->sim_->integrate();
+  this->int_->integrateNVE();
 }
 
 void simSoft::rescaleVelocities(double Temp) {
@@ -1323,26 +1326,27 @@ void simSoft::rescaleVelocities(double Temp) {
 
 //************************* Nose-Hoover integrator ***************************//
 void simSoft::getNoseHooverParams(double &mass, double &damping) {
-  mass = this->sim_->mass;
-  damping = this->sim_->gamma;
+  mass = this->int_->mass;
+  damping = this->int_->gamma;
 }
 
 void simSoft::initSoftNoseHoover(double Temp, double mass, double gamma, bool readState) {
-  this->sim_ = new SoftNoseHoover(this, Integrator(Temp));
-  this->sim_->mass = mass;
-  this->sim_->gamma = gamma;
+  this->int_ = new Integrator(this);
+  this->int_->temp = Temp;
+  this->int_->mass = mass;
+  this->int_->gamma = gamma;
   resetLastPositions();
   setInitialPositions();
   shift = true;
   if(readState == false) {
-    this->sim_->injectKineticEnergy();
+    this->int_->injectKineticEnergy();
   }
   cout << "simSoft::initSoftNoseHoover:: current temperature: " << setprecision(12) << getTemperature();
-  cout << " mass: " << this->sim_->mass << ", damping: " << this->sim_->gamma << endl;
+  cout << " mass: " << this->int_->mass << ", damping: " << this->int_->gamma << endl;
 }
 
 void simSoft::softNoseHooverLoop() {
-  this->sim_->integrate();
+  this->int_->integrateNH();
 }
 
 //********************** functions for testing interaction *********************//

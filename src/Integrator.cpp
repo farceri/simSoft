@@ -6,7 +6,6 @@
 
 #include "../include/Integrator.h"
 #include "../include/defs.h"
-#include "../include/simSoft.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -15,35 +14,37 @@
 
 using namespace std;
 
-//************************* soft particle langevin ***************************//
-void SoftLangevin::integrate() {
-  updateVelocity(0.5 * sp_->dt);
-  updatePosition(sp_->dt);
-  sp_->checkParticleNeighbors();
-  sp_->calcParticleForceEnergy();
-  updateThermalVel();
-  updateVelocity(0.5 * sp_->dt);
+//********************** constructor and deconstructor ***********************//
+Integrator::Integrator(simSoft * spPtr):sp_(spPtr){
+	// Vector for extracting white noise
+	rand.resize(sp_->numParticles * sp_->nDim);
+	// Set variables to zero
+	std::fill(rand.begin(), rand.end(), double(0));
 }
 
-void SoftLangevin::injectKineticEnergy() {
-  double amplitude(sqrt(config.Tbath));
+Integrator::~Integrator() {
+	rand.clear();
+};
+
+void Integrator::injectKineticEnergy() {
+  double amplitude(sqrt(temp));
   // generate random numbers between 0 and noise for thermal noise
-  thrust::counting_iterator<long> index_sequence_begin(lrand48());
-  std::transform(index_sequence_begin, index_sequence_begin + sp_->numParticles * sp_->nDim, sp_->d_vel.begin(), gaussNum(0.f,amplitude));
+  gaussNum generateGaussNumbers(0.f, 1.f);
+  std::for_each(sp_->vel.begin(), sp_->vel.end(), [&](double& val) {val = generateGaussNumbers(0);});
 }
 
-void SoftLangevin::updateThermalVel() {
+void Integrator::updateThermalVel() {
   // generate random numbers between 0 and 1 for thermal noise
-  thrust::counting_iterator<long> index_sequence_begin(lrand48());
-  std::transform(index_sequence_begin, index_sequence_begin + sp_->numParticles * sp_->nDim, rand.begin(), gaussNum(0.f,1.f));
+  gaussNum generateGaussNumbers(0.f, 1.f);
+  std::for_each(rand.begin(), rand.end(), [&](double& val) {val = generateGaussNumbers(0);});
   for (long pId = 0; pId < sp_->numParticles; pId++) {
 		for (long dim = 0; dim < sp_->nDim; dim++) {
-      sp_->force[pId * s_nDim + dim] += noise * rand[pId * sp_->nDim + dim] - gamma * pVel[pId * sp_->nDim + dim];
+      sp_->force[pId * sp_->nDim + dim] += noise * rand[pId * sp_->nDim + dim] - gamma * sp_->vel[pId * sp_->nDim + dim];
     }
   }
 }
 
-void SoftLangevin::updateVelocity(double timeStep) {
+void Integrator::updateVelocity(double timeStep) {
   for (long pId = 0; pId < sp_->numParticles; pId++) {
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] += timeStep * sp_->force[pId * sp_->nDim + dim] / mass;
@@ -51,7 +52,7 @@ void SoftLangevin::updateVelocity(double timeStep) {
   }
 }
 
-void SoftLangevin::updatePosition(double timeStep) {
+void Integrator::updatePosition(double timeStep) {
   for (long pId = 0; pId < sp_->numParticles; pId++) {
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->pos[pId * sp_->nDim + dim] += timeStep * sp_->vel[pId * sp_->nDim + dim];
@@ -59,7 +60,7 @@ void SoftLangevin::updatePosition(double timeStep) {
   }
 }
 
-void SoftLangevin::conserveMomentum() {
+void Integrator::conserveMomentum() {
   std::vector<double> vel_x(sp_->vel.size() / 2);
   std::vector<double> vel_y(sp_->vel.size() / 2);
   std::vector<long> idx(sp_->vel.size() / 2);
@@ -78,27 +79,28 @@ void SoftLangevin::conserveMomentum() {
   }
 }
 
-//**************************** soft particle nve *****************************//
-void SoftNVE::integrate() {
-  updateVelocity(0.5 * sp_->dt);
-  updatePosition(sp_->dt);
-  sp_->checkParticleNeighbors();
-  sp_->calcParticleForceEnergy();
-  updateVelocity(0.5 * sp_->dt);
-}
-
-//************************ soft particle Nose Hoover **************************//
-void SoftNoseHoover::integrate() {
+//************************* soft particle langevin ***************************//
+void Integrator::integrateLangevin() {
   updateVelocity(0.5 * sp_->dt);
   updatePosition(sp_->dt);
   sp_->checkNeighbors();
   sp_->calcForceEnergy();
   updateThermalVel();
+  updateVelocity(0.5 * sp_->dt);
 }
 
-void SoftNoseHoover::updateVelocity(double timeStep) {
+//**************************** soft particle nve *****************************//
+void Integrator::integrateNVE() {
+  updateVelocity(0.5 * sp_->dt);
+  updatePosition(sp_->dt);
+  sp_->checkNeighbors();
+  sp_->calcForceEnergy();
+  updateVelocity(0.5 * sp_->dt);
+}
+
+void Integrator::firstVelUpdateNH(double timeStep) {
   // update nose hoover damping
-  gamma += (timeStep / (2 * mass)) * (sp_->getKineticEnergy() - (sp_->nDim * sp_->numParticles + 1) * config.Tbath / 2);
+  gamma += (timeStep / (2 * mass)) * (sp_->getKineticEnergy() - (sp_->nDim * sp_->numParticles + 1) * temp / 2);
   for (long pId = 0; pId < sp_->numParticles; pId++) {
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] += timeStep * (sp_->force[pId * sp_->nDim + dim] - sp_->vel[pId * sp_->nDim + dim] * gamma);
@@ -106,13 +108,21 @@ void SoftNoseHoover::updateVelocity(double timeStep) {
   }
 }
 
-void SoftNoseHoover::updateThermalVel() {
-  double timeStep = 0.5 * sp_->dt;
+void Integrator::secondVelUpdateNH(double timeStep) {
   // update nose hoover damping
-  gamma += (sp_->dt / (2 * mass)) * (sp_->getKineticEnergy() - (sp_->nDim * sp_->numParticles + 1) * config.Tbath / 2);
+  gamma += (sp_->dt / (2 * mass)) * (sp_->getKineticEnergy() - (sp_->nDim * sp_->numParticles + 1) * temp / 2);
   for (long pId = 0; pId < sp_->numParticles; pId++) {
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] = (sp_->vel[pId * sp_->nDim + dim] + timeStep * sp_->force[pId * sp_->nDim + dim]) / (1 + timeStep * gamma);
     }
   }
+}
+
+//************************ soft particle Nose Hoover **************************//
+void Integrator::integrateNH() {
+  firstVelUpdateNH(0.5 * sp_->dt);
+  updatePosition(sp_->dt);
+  sp_->checkNeighbors();
+  sp_->calcForceEnergy();
+  secondVelUpdateNH(0.5 * sp_->dt);
 }

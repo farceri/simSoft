@@ -8,7 +8,7 @@
 
 # CC compiler options:
 CC=/usr/bin/g++
-CC_FLAGS= -O3
+CC_FLAGS= -O3 -std=c++17
 CC_LIBS= -lstdc++fs
 
 ##########################################################
@@ -44,7 +44,7 @@ EXE = compress
 #EXE = test
 
 # Object files:
-OBJS = $(OBJ_DIR)/$(EXE).o $(OBJ_DIR)/simSoft.o $(OBJ_DIR)/FIRE.o
+OBJS = $(OBJ_DIR)/$(EXE).o $(OBJ_DIR)/simSoft.o $(OBJ_DIR)/FIRE.o $(OBJ_DIR)/Integrator.o
 
 ##########################################################
 
@@ -64,5 +64,5 @@ $(OBJ_DIR)/%.o : $(SRC_DIR)/%.cpp $(INC_DIR)/%.h
 
 # Clean objects in object directory.
 clean:
-	$(RM) bin/* *.o $(EXE)
+	rm -f $(OBJ_DIR)/*.o $(EXE)
 

@@ -29,8 +29,8 @@ struct simControlStruct {
 #define CALL_MEMBER_FN(object, ptrToMember) ((object).*(ptrToMember))
 
 class simSoft;
+class Integrator;
 class FIRE;
-class SimInterface;
 
 class simSoft
 {
@@ -42,7 +42,7 @@ public:
 
   // Simulator
   FIRE * fire_;
-  SimInterface * sim_;
+  Integrator * int_;
 
   simControlStruct simControl;
 

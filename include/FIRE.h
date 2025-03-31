@@ -8,7 +8,6 @@
 #define FIRE_H_
 
 #include "simSoft.h"
-#include "defs.h"
 #include <vector>
 
 class simSoft;

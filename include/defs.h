@@ -27,7 +27,13 @@ const double WCAcut = 1.122462048;
 // Gravity
 const double gravity = 9.81e-02;
 
-// thrust functors
+struct maximum {
+    template <typename T>
+    constexpr T operator()(const T& a, const T& b) const {
+        return std::max(a, b);
+    }
+};
+
 struct square {
     double operator()(const double xi) const { return xi * xi; }
 };
