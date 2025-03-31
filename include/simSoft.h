@@ -224,15 +224,15 @@ public:
 
   inline double calcDistance(const double* thisVec, const double* otherVec);
 
-  inline double calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
+  inline double calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce);
 
-  inline double calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
+  inline double calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce);
 
-  inline double calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
+  inline double calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce);
 
-  inline double calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce);
+  inline double calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce, double* otherForce);
 
-  inline double calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce);
+  inline double calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce, double* otherForce);
 
   void neighborInteraction();
   
@@ -323,6 +323,10 @@ public:
   void updateVel(double timeStep);
 
   void verletLoop(double timeStep);
+
+  void printTwoParticles();
+
+  void printThreeParticles();
 
 };
 

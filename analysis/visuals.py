@@ -127,10 +127,17 @@ def shiftPositions(pos, boxSize, xshift, yshift):
     pos[:,1] -= np.floor(pos[:,1]/boxSize[1]) * boxSize[1]
     return pos
 
+def getDirSep(dirName, fileName):
+    if(os.path.exists(dirName + os.sep + fileName + ".dat")):
+        return "/"
+    else:
+        return "/../"
+
 def plotPacking(dirName, figureName, quiver=False, lj=False, shiftx=0, shifty=0, double=False, numA=0, alpha=0.6, lw=0.3):
-    boxSize = np.atleast_1d(np.loadtxt(dirName + os.sep + 'boxSize.dat'))
+    sep = getDirSep(dirName, 'boxSize')
+    boxSize = np.atleast_1d(np.loadtxt(dirName + sep + 'boxSize.dat'))
     pos = getPBCPositions(dirName + os.sep + 'pos.dat', boxSize)
-    rad = np.array(np.loadtxt(dirName + os.sep + 'rad.dat'))
+    rad = np.array(np.loadtxt(dirName + sep + 'rad.dat'))
     # plot particle size as interaction size
     if lj: rad *= 2**(1/6)
     # apply shift if different from zero
@@ -189,6 +196,64 @@ def plotEnergy(dirName, figureName):
     else:
         print("no energy.dat file was found in", dirName)
 
+def readFromParams(dirName, paramName):
+    name = None
+    with open(dirName + os.sep + "params.dat") as file:
+        for line in file:
+            name, scalarString = line.strip().split("\t")
+            if(name == paramName):
+                return float(scalarString)
+    if(name == None):
+        print("The variable", paramName, "is not saved in this file")
+        return None
+    
+def getOrderedDirectories(dirName):
+    listDir = []
+    listScalar = []
+    for dir in os.listdir(dirName):
+        if(os.path.isdir(dirName + os.sep + dir)):
+            listDir.append(dir)
+            listScalar.append(dir.strip('t'))
+    listScalar = np.array(listScalar, dtype=np.int64)
+    listDir = np.array(listDir)
+    listDir = listDir[np.argsort(listScalar)]
+    listScalar = np.sort(listScalar)
+    return listDir, listScalar
+
+def plotTest2Forces(dirName, which=None):
+    timeStep = readFromParams(dirName, "dt")
+    dirList, timeList = getOrderedDirectories(dirName)
+    timeList = np.array(timeList) * timeStep
+    force0x = []
+    force0y = []
+    force1x = []
+    force1y = []
+    for d in range(dirList.shape[0]):
+        force = np.loadtxt(dirName + os.sep + dirList[d] + "/forces.dat")
+        force0x.append(force[0,0])
+        force0y.append(force[0,1])
+        force1x.append(force[1,0])
+        force1y.append(force[1,1])
+    fig = plt.figure(figsize = (7, 5), dpi = 120)
+    ax = fig.gca()
+    if(which=='0'):
+        ax.plot(timeList, force0x, linewidth=1, color='k', marker='o', fillstyle='none', label="$p0, x$")
+        ax.plot(timeList, force0y, linewidth=1, color='k', marker='v', fillstyle='none', label="$p0, y$")
+    elif(which=='1'):
+        ax.plot(timeList, force1x, linewidth=1, color='g', marker='o', fillstyle='none', label="$p1, x$")
+        ax.plot(timeList, force1y, linewidth=1, color='g', marker='v', fillstyle='none', label="$p1, y$")
+    else:
+        ax.plot(timeList, force0x, linewidth=1, color='k', marker='o', fillstyle='none', label="$p0, x$")
+        ax.plot(timeList, force0y, linewidth=1, color='k', marker='v', fillstyle='none', label="$p0, y$")
+        ax.plot(timeList, force1x, linewidth=1, color='g', marker='o', fillstyle='none', label="$p1, x$")
+        ax.plot(timeList, force1y, linewidth=1, color='g', marker='v', fillstyle='none', label="$p1, y$")
+    ax.legend(fontsize=10, loc='best')
+    ax.tick_params(axis='both', labelsize=12)
+    ax.set_xlabel("$Simulation$ $step$", fontsize=15)
+    ax.set_ylabel("$Forces$", fontsize=15)
+    plt.tight_layout()
+    plt.show()
+
 # Main script with plotting options
 if __name__ == '__main__':
     dirName = sys.argv[1]
@@ -221,6 +286,9 @@ if __name__ == '__main__':
 
     elif(whichPlot == 'energy'):
         plotEnergy(dirName, figureName)
+
+    elif(whichPlot == 'test2'):
+        plotTest2Forces(dirName, which=sys.argv[4])
 
     else:
         print('Please specify the type of plot you want')

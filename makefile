@@ -34,14 +34,14 @@ INC_DIR = include
 
 # Target executable name:
 # make samples
-EXE = compress
+#EXE = compress
 
 # run dynamics
 #EXE = runNVE
 #EXE = runNVT
 
 # testing
-#EXE = test
+EXE = test
 
 # Object files:
 OBJS = $(OBJ_DIR)/$(EXE).o $(OBJ_DIR)/simSoft.o $(OBJ_DIR)/FIRE.o $(OBJ_DIR)/Integrator.o

@@ -343,7 +343,7 @@ public:
     }
   }
 
-  void saveParticleState(string dirName) {
+  void saveState(string dirName) {
     save2DFile(dirName + "pos.dat", sp_->getPositions(), sp_->nDim);
     save2DFile(dirName + "vel.dat", sp_->getVelocities(), sp_->nDim);
     if(sp_->simControl.particleType == simControlStruct::particleEnum::active || sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
@@ -353,6 +353,10 @@ public:
         save2DFile(dirName + "angles.dat", sp_->getAngles(), sp_->nDim);
       }
     }
+  }
+
+  void saveForces(string dirName) {
+    save2DFile(dirName + "forces.dat", sp_->getForces(), sp_->nDim);
   }
 
   void saveNeighbors(string dirName) {

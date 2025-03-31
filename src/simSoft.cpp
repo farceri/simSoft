@@ -17,6 +17,7 @@
 #include <cmath>
 #include <random>
 #include <time.h>
+#include <omp.h>
 
 using namespace std;
 using std::cout;
@@ -235,14 +236,13 @@ void simSoft::checkPBC() {
   double *pPosPBC = posPBC.data();
   double *pBoxSize = boxSize.data();
 
-  long f_nDim(nDim);
-  auto checkPBC = [&](long pId) {
-    for (long dim = 0; dim < f_nDim; dim++) {
-			pPosPBC[pId * f_nDim + dim] = pPos[pId * f_nDim + dim] - floor(pPos[pId * f_nDim + dim] / pBoxSize[dim]) * pBoxSize[dim];
+  #pragma omp parallel for
+  for (long pId = 0; pId < numParticles; pId++) {
+    #pragma unroll(MAXDIM)
+    for (long dim = 0; dim < nDim; dim++) {
+			pPosPBC[pId * nDim + dim] = pPos[pId * nDim + dim] - floor(pPos[pId * nDim + dim] / pBoxSize[dim]) * pBoxSize[dim];
 		}
-  };
-
-  std::for_each(pos.begin(), pos.end(), [&, i = 0](double&) mutable { checkPBC(i++); });
+  }
 
   pos = posPBC;
 }
@@ -446,22 +446,20 @@ void simSoft::scaleVelocities(double scale) {
 
 // compute particle angles from velocity
 void simSoft::initializeAngles() {
-  long f_nDim(nDim);
   randNum generateRandomNumbers(-PI, PI);  // Create a randNum object with the desired range
   std::for_each(angle.begin(), angle.end(), [&](double& val) {val = generateRandomNumbers(0);});
   if(nDim == 3) {
-      double* pAngle = angle.data();
-      const double* pVel = vel.data();
+    double* pAngle = angle.data();
+    const double* pVel = vel.data();
 
-      auto compute3DAngle = [&](long particleId) {
-      auto theta = acos(pVel[particleId * f_nDim + 2]);
-      auto phi = atan(pVel[particleId * f_nDim + 1] / pVel[particleId * f_nDim]);
-      pAngle[particleId * f_nDim] = cos(theta) * cos(phi);
-      pAngle[particleId * f_nDim + 1] = sin(theta) * cos(phi);
-      pAngle[particleId * f_nDim + 2] = sin(phi);
-    };
-
-    std::for_each(angle.begin(), angle.end(), [&, i = 0](double&) mutable { compute3DAngle(i++); });
+    #pragma omp parallel for
+    for (long particleId = 0; particleId < numParticles; particleId++) {
+      auto theta = acos(pVel[particleId * nDim + 2]);
+      auto phi = atan(pVel[particleId * nDim + 1] / pVel[particleId * nDim]);
+      pAngle[particleId * nDim] = cos(theta) * cos(phi);
+      pAngle[particleId * nDim + 1] = sin(theta) * cos(phi);
+      pAngle[particleId * nDim + 2] = sin(phi);
+    }
   }
 }
 
@@ -557,8 +555,6 @@ void simSoft::setLJWCAparams(double LJcutoff_, long numA_) {
 }
 
 void simSoft::addSelfPropulsion() {
-  long f_nDim(nDim);
-  double f_driving(driving);
   // use this to be able to set taup to 0
   double amplitude = 0.;
   if(taup != 0) {
@@ -571,59 +567,51 @@ void simSoft::addSelfPropulsion() {
     std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateWrappedNumbers(0);});
     double *pRandAngle = randAngle.data();
 
-    auto updateActiveNoise2D = [&](long pId) {
+    #pragma omp parallel for
+    for (long pId = 0; pId < numParticles; pId++) {
       pAngle[pId] += pRandAngle[pId];
       pAngle[pId] = pAngle[pId] + PI;
       pAngle[pId] = pAngle[pId] - 2.0 * PI * floor(pAngle[pId] / (2.0 * PI));
       pAngle[pId] = pAngle[pId] - PI;
       #pragma unroll (MAXDIM)
-      for (long dim = 0; dim < f_nDim; dim++) {
-        pForce[pId * f_nDim + dim] += f_driving * ((1 - dim) * cos(pAngle[pId]) + dim * sin(pAngle[pId]));
+      for (long dim = 0; dim < nDim; dim++) {
+        pForce[pId * nDim + dim] += driving * ((1 - dim) * cos(pAngle[pId]) + dim * sin(pAngle[pId]));
       }
-    };
-
-    std::for_each(angle.begin(), angle.end(), [&, i = 0](double&) mutable { updateActiveNoise2D(i++); });
-
-
+    }
   } else if(nDim == 3) {
     randNum generateRandNumbers(-PI, PI);
     std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateRandNumbers(0);});
     double *pRandAngle = randAngle.data();
 
-    auto normalizeVector = [&](long pId) {
+    #pragma omp parallel for
+    for (long pId = 0; pId < numParticles; pId++) {
       auto norm = 0.0;
       #pragma unroll (MAXDIM)
-      for (long dim = 0; dim < f_nDim; dim++) {
-        norm += pRandAngle[pId * f_nDim + dim] * pRandAngle[pId * f_nDim + dim];
+      for (long dim = 0; dim < nDim; dim++) {
+        norm += pRandAngle[pId * nDim + dim] * pRandAngle[pId * nDim + dim];
       }
       norm = sqrt(norm);
       #pragma unroll (MAXDIM)
-      for (long dim = 0; dim < f_nDim; dim++) {
-        pRandAngle[pId * f_nDim + dim] /= norm;
+      for (long dim = 0; dim < nDim; dim++) {
+        pRandAngle[pId * nDim + dim] /= norm;
       }
-    };
+    }
 
-    std::for_each(randAngle.begin(), randAngle.end(), [&, i = 0](double&) mutable { normalizeVector(i++); });
-
-    auto updateActiveNoise3D = [&](long pId) {
-      pAngle[pId * f_nDim] += amplitude * (pAngle[pId * f_nDim + 1] * pRandAngle[pId * f_nDim + 2] - pAngle[pId * f_nDim + 2] * pRandAngle[pId * f_nDim + 1]);
-      pAngle[pId * f_nDim + 1] += amplitude * (pAngle[pId * f_nDim + 2] * pRandAngle[pId * f_nDim] - pAngle[pId * f_nDim] * pRandAngle[pId * f_nDim + 2]);
-      pAngle[pId * f_nDim + 2] += amplitude * (pAngle[pId * f_nDim] * pRandAngle[pId * f_nDim + 1] - pAngle[pId * f_nDim + 1] * pRandAngle[pId * f_nDim]);
+    #pragma omp parallel for
+    for (long pId = 0; pId < numParticles; pId++) {
+      pAngle[pId * nDim] += amplitude * (pAngle[pId * nDim + 1] * pRandAngle[pId * nDim + 2] - pAngle[pId * nDim + 2] * pRandAngle[pId * nDim + 1]);
+      pAngle[pId * nDim + 1] += amplitude * (pAngle[pId * nDim + 2] * pRandAngle[pId * nDim] - pAngle[pId * nDim] * pRandAngle[pId * nDim + 2]);
+      pAngle[pId * nDim + 2] += amplitude * (pAngle[pId * nDim] * pRandAngle[pId * nDim + 1] - pAngle[pId * nDim + 1] * pRandAngle[pId * nDim]);
       #pragma unroll (MAXDIM)
-      for (long dim = 0; dim < f_nDim; dim++) {
-        pForce[pId * f_nDim + dim] += f_driving * pAngle[pId * f_nDim + dim];
+      for (long dim = 0; dim < nDim; dim++) {
+        pForce[pId * nDim + dim] += driving * pAngle[pId * nDim + dim];
       }
-    };
-
-    std::for_each(angle.begin(), angle.end(), [&, i = 0](double&) mutable { updateActiveNoise3D(i++); });
+    }
   }
 }
 
 void simSoft::addVicsekAlignment() {
 	if(nDim == 2) {
-    int f_nDim(nDim);
-    double f_dt(dt);
-    double f_driving(driving);
     // use this to be able to set taup to 0
     double amplitude = 0.;
     if(taup != 0) {
@@ -636,19 +624,18 @@ void simSoft::addVicsekAlignment() {
     double *pAngle = angle.data();
     double *pForce = force.data();
 
-    auto updateVicsekAlignment2D = [&](long pId) {
+    #pragma omp parallel for
+    for (long pId = 0; pId < numParticles; pId++) {
       // overdamped equation for the angle with vicsek alignment as torque
-      pAngle[pId] += pRandAngle[pId] + f_dt * pAlpha[pId];
+      pAngle[pId] += pRandAngle[pId] + dt * pAlpha[pId];
       pAngle[pId] = pAngle[pId] + PI;
       pAngle[pId] = pAngle[pId] - 2.0 * PI * floor(pAngle[pId] / (2.0 * PI));
       pAngle[pId] = pAngle[pId] - PI;
       #pragma unroll (MAXDIM)
-      for (long dim = 0; dim < f_nDim; dim++) {
-        pForce[pId * f_nDim + dim] += f_driving * ((1 - dim) * cos(pAngle[pId]) + dim * sin(pAngle[pId]));
+      for (long dim = 0; dim < nDim; dim++) {
+        pForce[pId * nDim + dim] += driving * ((1 - dim) * cos(pAngle[pId]) + dim * sin(pAngle[pId]));
       }
-    };
-
-    std::for_each(angle.begin(), angle.end(), [&, i = 0](double&) mutable { updateVicsekAlignment2D(i++); });
+    }
   } else {
     cout << "simSoft::addVicsekAlignment: only 2D vicsek alignment is implemented!" << endl;
   }
@@ -722,7 +709,7 @@ inline double simSoft::calcDistance(const double* thisVec, const double* otherVe
   return sqrt(distanceSq);
 }
 
-inline double simSoft::calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce) {
+inline double simSoft::calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce) {
 	double delta[MAXDIM];
 	//overlap = calcOverlap(thisPos, otherPos, radSum);
 	auto distance = calcDeltaAndDistance(thisPos, otherPos, delta);
@@ -731,14 +718,15 @@ inline double simSoft::calcContactInteraction(const double* thisPos, const doubl
 		auto gradMultiple = ec * overlap / radSum;
 		#pragma unroll (MAXDIM)
 		for (long dim = 0; dim < nDim; dim++) {
-			currentForce[dim] += gradMultiple * delta[dim] / distance;
+			currentForce[dim] += 0.5 * gradMultiple * delta[dim] / distance;
+			otherForce[dim] -= 0.5 * gradMultiple * delta[dim] / distance;
 		}
-	  	return (0.5 * ec * overlap * overlap) * 0.5;
+	  	return (0.5 * ec * overlap * overlap);
 	}
 	return 0.;
 }
 
-inline double simSoft::calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce) {
+inline double simSoft::calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce) {
 	double delta[MAXDIM];
 	//distance = calcDistance(thisPos, otherPos);
 	auto distance = calcDeltaAndDistance(thisPos, otherPos, delta);
@@ -751,15 +739,16 @@ inline double simSoft::calcLJInteraction(const double* thisPos, const double* ot
 		auto gradMultiple = 24 * ec * (2 * ratio12 - ratio6) / distance - forceShift;
 		#pragma unroll (MAXDIM)
 		for (long dim = 0; dim < nDim; dim++) {
-	    	currentForce[dim] += gradMultiple * delta[dim] / distance;
-	  	}
+			currentForce[dim] += 0.5 * gradMultiple * delta[dim] / distance;
+			otherForce[dim] -= 0.5 * gradMultiple * delta[dim] / distance;
+    }
 		return 0.5 * (4 * ec * (ratio12 - ratio6) - LJecut - abs(forceShift) * (distance - LJcutoff * radSum));
 	} else {
 		return 0.0;
 	}
 }
 
-inline double simSoft::calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce) {
+inline double simSoft::calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce) {
 	double delta[MAXDIM];
 	auto distance = calcDeltaAndDistance(thisPos, otherPos, delta);
 	auto ratio = radSum / distance;
@@ -769,15 +758,16 @@ inline double simSoft::calcWCAInteraction(const double* thisPos, const double* o
 		auto gradMultiple = 24 * ec * (2 * ratio12 - ratio6) / distance;
 		#pragma unroll (MAXDIM)
 		for (long dim = 0; dim < nDim; dim++) {
-	    	currentForce[dim] += gradMultiple * delta[dim] / distance;
+			currentForce[dim] += 0.5 * gradMultiple * delta[dim] / distance;
+			otherForce[dim] -= 0.5 * gradMultiple * delta[dim] / distance;
 	 	}
-	  	return 0.5 * ec * (4 * (ratio12 - ratio6) + 1);
+    return 0.5 * ec * (4 * (ratio12 - ratio6) + 1);
 	} else {
 		return 0.0;
 	}
 }
 
-inline double simSoft::calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce) {
+inline double simSoft::calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce, double* otherForce) {
 	double delta[MAXDIM];
 	//distance = calcDistance(thisPos, otherPos);
 	auto distance = calcDeltaAndDistance(thisPos, otherPos, delta);
@@ -809,15 +799,16 @@ inline double simSoft::calcDoubleLJInteraction(const double* thisPos, const doub
 		}
 		#pragma unroll (MAXDIM)
 		for (long dim = 0; dim < nDim; dim++) {
-	    	currentForce[dim] += gradMultiple * delta[dim] / distance;
-	  	}
+			currentForce[dim] += 0.5 * gradMultiple * delta[dim] / distance;
+			otherForce[dim] -= 0.5 * gradMultiple * delta[dim] / distance;
+    }
 		return epot;
 	} else {
 		return 0.0;
 	}
 }
 
-inline double simSoft::calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce) {
+inline double simSoft::calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce, double* otherForce) {
 	double delta[MAXDIM];
 	//distance = calcDistance(thisPos, otherPos);
 	auto distance = calcDeltaAndDistance(thisPos, otherPos, delta);
@@ -838,8 +829,9 @@ inline double simSoft::calcLJMinusPlusInteraction(const double* thisPos, const d
 		auto epot = 0.5 * (4 * ec * (ratio12 + sign * ratio6) - ecut - abs(forceShift) * (distance - LJcutoff * radSum));
 		#pragma unroll (MAXDIM)
 		for (long dim = 0; dim < nDim; dim++) {
-	    	currentForce[dim] += gradMultiple * delta[dim] / distance;
-	  	}
+			currentForce[dim] += 0.5 * gradMultiple * delta[dim] / distance;
+			otherForce[dim] -= 0.5 * gradMultiple * delta[dim] / distance;
+    }
 		return epot;
 	} else {
 		return 0.0;
@@ -847,48 +839,56 @@ inline double simSoft::calcLJMinusPlusInteraction(const double* thisPos, const d
 }
 
 void simSoft::neighborInteraction() {
+  // first zero out the force and energy
+  for (long particleId = 0; particleId < nDim; particleId++) {
+    for (long dim = 0; dim < nDim; dim++) {
+      force[particleId * nDim + dim] = 0.;
+    }
+    energy[particleId] = 0.;
+  }
+  // loop over all particles and compute interaction
   for (long particleId = 0; particleId < nDim; particleId++) {
     auto otherId = -1;
     double otherRad, thisPos[MAXDIM], otherPos[MAXDIM];
-    // zero out the force and get particle positions
-    for (long dim = 0; dim < nDim; dim++) {
-      force[particleId * nDim + dim] = 0;
-      thisPos[dim] = pos[particleId * nDim + dim];
-    }
+    getParticlePos(particleId, thisPos);
     auto thisRad = rad[particleId];
-    energy[particleId] = 0;
     // interaction with neighbor particles
     for (long nListId = 0; nListId < maxNeighborList[particleId]; nListId++) {
       if (extractParticleNeighbor(particleId, nListId, otherPos, otherRad)) {
         auto radSum = thisRad + otherRad;
+        auto interaction = 0.;
         switch (simControl.potentialType) {
           case simControlStruct::potentialEnum::harmonic:
-          energy[particleId] += calcContactInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+          interaction = calcContactInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::lennardJones:
-          energy[particleId] += calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+          interaction = calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::WCA:
-          energy[particleId] += calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+          interaction = calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::doubleLJ:
           otherId = neighborList[particleId * neighborListSize + nListId];
-          energy[particleId] += calcDoubleLJInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim]);
+          interaction = calcDoubleLJInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::LJMinusPlus:
           otherId = neighborList[particleId * neighborListSize + nListId];
-          energy[particleId] += calcLJMinusPlusInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim]);
+          interaction = calcLJMinusPlusInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::LJWCA:
           otherId = neighborList[particleId * neighborListSize + nListId];
           if((particleId < numA && otherId >= numA) || (particleId >= numA && otherId < numA)) {
-            energy[particleId] += calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+            interaction = calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           } else {
-            energy[particleId] += calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+            interaction = calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           }
           break;
           default:
           break;
+        }
+        if(interaction != 0.) {
+          energy[particleId] += 0.5 * interaction;
+          energy[otherId] += 0.5 * interaction;
         }
       }
     }
@@ -896,46 +896,52 @@ void simSoft::neighborInteraction() {
 }
 
 void simSoft::allToAllInteraction() {
+  // first zero out the force and energy
   for (long particleId = 0; particleId < nDim; particleId++) {
-    //printf("particleId %ld\n", particleId);
-    double otherRad, thisPos[MAXDIM], otherPos[MAXDIM];
-    // zero out the force and get particle positions
     for (long dim = 0; dim < nDim; dim++) {
-      force[particleId * nDim + dim] = 0;
-      thisPos[dim] = pos[particleId * nDim + dim];
+      force[particleId * nDim + dim] = 0.;
     }
+    energy[particleId] = 0.;
+  }
+  // loop over all particles and compute interaction
+  for (long particleId = 0; particleId < nDim; particleId++) {
+    double otherRad, thisPos[MAXDIM], otherPos[MAXDIM];
+    getParticlePos(particleId, thisPos);
     auto thisRad = rad[particleId];
-    energy[particleId] = 0;
     // interaction with neighbor particles
     for (long otherId = 0; otherId < numParticles; otherId++) {
       if (extractOtherParticle(particleId, otherId, otherPos, otherRad)) {
         auto radSum = thisRad + otherRad;
-        //printf("numParticles: %ld otherId %ld particleId %ld radSum %lf\n", numParticles, otherId, particleId, radSum);
+        auto interaction = 0.;
         switch (simControl.potentialType) {
           case simControlStruct::potentialEnum::harmonic:
-          energy[particleId] += calcContactInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+          interaction = calcContactInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::lennardJones:
-          energy[particleId] += calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+          interaction = calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::WCA:
-          energy[particleId] += calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+          interaction = calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::doubleLJ:
-          energy[particleId] += calcDoubleLJInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim]);
+          interaction = calcDoubleLJInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::LJMinusPlus:
-          energy[particleId] += calcLJMinusPlusInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim]);
+          interaction = calcLJMinusPlusInteraction(thisPos, otherPos, radSum, particleId, otherId, &force[particleId*nDim], &force[otherId*nDim]);
           break;
           case simControlStruct::potentialEnum::LJWCA:
           if((particleId < numA && otherId >= numA) || (particleId >= numA && otherId < numA)) {
-            energy[particleId] += calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+            interaction = calcWCAInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           } else {
-            energy[particleId] += calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim]);
+            interaction = calcLJInteraction(thisPos, otherPos, radSum, &force[particleId*nDim], &force[otherId*nDim]);
           }
           break;
           default:
           break;
+        }
+        if(interaction != 0.) {
+          energy[particleId] += 0.5 * interaction;
+          energy[otherId] += 0.5 * interaction;
         }
       }
     }
@@ -1001,19 +1007,16 @@ void simSoft::adjustKineticEnergy(double prevEtot) {
   deltaEtot -= prevEtot;
   if(ekin > deltaEtot) {
     scale = sqrt((ekin - deltaEtot) / ekin);
-    //cout << "deltaEtot: " << deltaEtot << " ekin - deltaEtot: " << ekin - deltaEtot << " scale: " << scale << endl;
-    long f_nDim(nDim);
+    cout << "simSoft::adjustKineticEnergy:: scale: " << scale << endl;
     double* pVel = vel.data();
 
-    auto adjustVel = [&](long pId) {
+    #pragma omp parallel for
+    for (long pId = 0; pId < numParticles; pId++) {
       #pragma unroll (MAXDIM)
-      for (long dim = 0; dim < f_nDim; dim++) {
-        pVel[pId * f_nDim + dim] *= scale;
+      for (long dim = 0; dim < nDim; dim++) {
+        pVel[pId * nDim + dim] *= scale;
       }
-    };
-
-    cout << "simSoft::adjustKineticEnergy:: scale: " << scale << endl;
-    std::for_each(vel.begin(), vel.end(), [&, i = 0](double&) mutable { adjustVel(i++); });
+    }
   } else {
     cout << "simSoft::adjustKineticEnergy:: kinetic energy is less then change in total energy - no adjustment is made" << endl;
   }
@@ -1072,16 +1075,18 @@ void simSoft::removeCOMDrift() {
   double drift_y = std::reduce(disp_y.begin(), disp_y.end(), double(0), std::plus<double>()) / numParticles;
 
   // subtract drift from current positions
-  long f_nDim(nDim);
 	double* pPos = pos.data();
 	double* pBoxSize = boxSize.data();
 
-  auto removeDrift = [&](long pId) {
-		pPos[pId * f_nDim] -= drift_x;
-    pPos[pId * f_nDim + 1] -= drift_y;
-  };
-  
-  std::for_each(pos.begin(), pos.end(), [&, i = 0](double&) mutable { removeDrift(i++); });
+  #pragma omp parallel for
+  for (long pId = 0; pId < numParticles; pId++) {
+		pPos[pId * nDim] -= drift_x;
+    pPos[pId * nDim + 1] -= drift_y;
+    #pragma unroll(MAXDIM)
+    for (long dim = 0; dim < nDim; dim++) {
+      pPos[pId * nDim + dim] = pPos[pId * nDim + dim] - floor(pPos[pId * nDim + dim] / pBoxSize[dim]) * pBoxSize[dim];
+    }
+  }
 }
 
 void simSoft::calcDisplacement(int *flag, double cutoff) {
@@ -1311,17 +1316,15 @@ void simSoft::softNVELoop() {
 
 void simSoft::rescaleVelocities(double Temp) {
   double scale = sqrt(Temp / getTemperature());
-  long f_nDim(nDim);
 	double* pVel = vel.data();
 
-  auto rescaleVel = [&](long pId) {
+  #pragma omp parallel for
+  for (long pId = 0; pId < numParticles; pId++) {
     #pragma unroll (MAXDIM)
-		for (long dim = 0; dim < f_nDim; dim++) {
-      pVel[pId * f_nDim + dim] *= scale;
+		for (long dim = 0; dim < nDim; dim++) {
+      pVel[pId * nDim + dim] *= scale;
     }
-  };
-
-  std::for_each(vel.begin(), vel.end(), [&, i = 0](double&) mutable { rescaleVel(i++); });
+  }
 }
 
 //************************* Nose-Hoover integrator ***************************//
@@ -1385,35 +1388,27 @@ void simSoft::setThreeParticleTestPacking(double sigma02, double sigma1, double 
 }
 
 void simSoft::updatePos(double timeStep) {
-  int f_nDim(nDim);
-  double f_dt(timeStep);
 	double* pPos = pos.data();
 	const double* pVel = vel.data();
 
-  auto updatePos = [&](long pId) {
-    #pragma unroll (MAXDIM)
-		for (long dim = 0; dim < f_nDim; dim++) {
-      pPos[pId * f_nDim + dim] += f_dt * pVel[pId * f_nDim + dim];
+  #pragma omp parallel for
+  for (long pId = 0; pId < numParticles; pId++) {
+    for (long dim = 0; dim < nDim; dim++) {
+      pPos[pId * nDim + dim] += dt * pVel[pId * nDim + dim];
     }
-  };
-
-  std::for_each(pos.begin(), pos.end(), [&, i = 0](double&) mutable { updatePos(i++); });
+  }
 }
 
 void simSoft::updateVel(double timeStep) {
-  int f_nDim(nDim);
-  double f_dt(timeStep);
 	double* pVel = vel.data();
 	const double* pForce = force.data();
 
-  auto updateVel = [&](long pId) {
-    #pragma unroll (MAXDIM)
-		for (long dim = 0; dim < f_nDim; dim++) {
-      pVel[pId * f_nDim + dim] += f_dt * pForce[pId * f_nDim + dim];
+  #pragma omp parallel for
+  for (long pId = 0; pId < numParticles; pId++) {
+    for (long dim = 0; dim < nDim; dim++) {
+      pVel[pId * nDim + dim] += dt * pForce[pId * nDim + dim];
     }
-  };
-
-  std::for_each(vel.begin(), vel.end(), [&, i = 0](double&) mutable { updateVel(i++); });
+  }
 }
 
 void simSoft::verletLoop(double timeStep) {
@@ -1422,4 +1417,25 @@ void simSoft::verletLoop(double timeStep) {
   checkNeighbors();
   calcForceEnergy();
   updateVel(0.5*timeStep);
+}
+
+void simSoft::printTwoParticles() {
+  cout << "particle 0: fx: " << force[0] << " fy: " << force[1] << endl;
+  cout << "particle 0: vx: " << vel[0] << " vy: " << vel[1] << endl;
+  cout << "particle 0: x: " << pos[0] << " y: " << pos[1] << endl;
+  cout << "particle 1: fx: " << force[2] << " fy: " << force[3] << endl;
+  cout << "particle 1: vx: " << vel[2] << " vy: " << vel[3] << endl;
+  cout << "particle 1: x: " << pos[2] << " y: " << pos[3] << endl;
+}
+
+void simSoft::printThreeParticles() {
+  cout << "particle 0: fx: " << force[0] << " fy: " << force[1] << endl;
+  cout << "particle 0: vx: " << vel[0] << " vy: " << vel[1] << endl;
+  cout << "particle 0: x: " << pos[0] << " y: " << pos[1] << endl;
+  cout << "particle 1: fx: " << force[2] << " fy: " << force[3] << endl;
+  cout << "particle 1: vx: " << vel[2] << " vy: " << vel[3] << endl;
+  cout << "particle 1: x: " << pos[2] << " y: " << pos[3] << endl;
+  cout << "particle 2: fx: " << force[4] << " fy: " << force[5] << endl;
+  cout << "particle 2: vx: " << vel[4] << " vy: " << vel[5] << endl;
+  cout << "particle 2: x: " << pos[4] << " y: " << pos[5] << endl;
 }
