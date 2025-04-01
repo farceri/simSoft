@@ -9,4 +9,4 @@ Usage
 3. change executable in makefile to compile different scripts (compress.cpp, test.cpp, runNVE.cpp)
 
 Ex. 2D packing of polydisperse disks with packing fraction 0.72
-![test](https://github.com/user-attachments/assets/8165be0f-c535-47a7-a537-fbd841e3a69a)
+![test](https://github.com/user-attachments/assets/d25c6193-3eeb-4871-95bb-578d2aa3a6ec)
