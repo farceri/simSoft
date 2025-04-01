@@ -209,6 +209,10 @@ public:
 
   void addVicsekAlignment();
 
+  inline bool extractVicsekNeighborAngle(const long particleId, const long nListId, double& otherAngle);
+
+  inline void checkAngleMinusPIPlusPI(double &angle);
+
   void calcVicsekAlignment();
 
   // inline functions
@@ -224,15 +228,15 @@ public:
 
   inline double calcDistance(const double* thisVec, const double* otherVec);
 
-  inline double calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce);
+  inline double calcContactInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
 
-  inline double calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce);
+  inline double calcLJInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
 
-  inline double calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce, double* otherForce);
+  inline double calcWCAInteraction(const double* thisPos, const double* otherPos, const double radSum, double* currentForce);
 
-  inline double calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce, double* otherForce);
+  inline double calcDoubleLJInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce);
 
-  inline double calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce, double* otherForce);
+  inline double calcLJMinusPlusInteraction(const double* thisPos, const double* otherPos, const double radSum, const long particleId, const long otherId, double* currentForce);
 
   void neighborInteraction();
   
@@ -252,7 +256,11 @@ public:
 
   double getEnergy();
 
-  void adjustKineticEnergy(double prevEtot);
+  void adjustKineticEnergy(double prevEtot_);
+
+  double getWaveNumber();
+
+  double getIsotropicISF(double waveNumber_);
 
   // neighbor update
   void setDisplacementCutoff(double cutoff_);
@@ -304,7 +312,9 @@ public:
 
   void softNVELoop();
 
-  void rescaleVelocities(double Temp);
+  void initSoftNVERescale(double Temp);
+
+  void softNVERescaleLoop();
   
   // Nose-Hoover integrator
   void getNoseHooverParams(double &mass, double &damping);

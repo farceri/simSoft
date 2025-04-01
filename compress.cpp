@@ -5,6 +5,7 @@
 // Compression for producing particle samples (packings) in 2 and 3 dimensions.
 // Samples are initialized with the FIRE minimizer in harmonic potential to suppress large forces.
 // Each compression step consists of running dynamics for maxStep and then shrink the simulation box.
+// Input directory is argv[1], es. mkdir samples/
 //
 // Include C++ header files
 
@@ -179,13 +180,6 @@ int main(int argc, char **argv) {
           sp.resetUpdateCount();
         } else {
           cout << endl;
-        }
-      }
-
-      // Rescale velocities for NVE
-      if(nve == true) {
-        if(abs(sp.getTemperature() - Tinject) > 1e-02) {
-          sp.rescaleVelocities(Tinject);
         }
       }
       step += 1;

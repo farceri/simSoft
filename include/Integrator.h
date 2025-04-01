@@ -35,8 +35,11 @@ public:
   void conserveMomentum();
   // Integrator of Langevin dynamics
   void integrateLangevin();
-  // Integrator at constant volume and energy
+  // Integrator at constant energy
   void integrateNVE();
+  // Integrator with velocity rescale
+  void scaleVelocity();
+  void integrateNVERescale();
   // Functions for Nose-Hoover integrator
   void firstVelUpdateNH(double timeStep);
   void secondVelUpdateNH(double timeStep);

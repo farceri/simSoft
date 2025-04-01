@@ -11,6 +11,9 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <algorithm>
+#include <numeric>
+#include <omp.h>
 
 using namespace std;
 
@@ -26,10 +29,11 @@ Integrator::~Integrator() {
 	rand.clear();
 };
 
+//************************* soft particle langevin ***************************//
 void Integrator::injectKineticEnergy() {
   double amplitude(sqrt(temp));
   // generate random numbers between 0 and noise for thermal noise
-  gaussNum generateGaussNumbers(0.f, 1.f);
+  gaussNum generateGaussNumbers(0.f, amplitude);
   std::for_each(sp_->vel.begin(), sp_->vel.end(), [&](double& val) {val = generateGaussNumbers(0);});
 }
 
@@ -37,7 +41,10 @@ void Integrator::updateThermalVel() {
   // generate random numbers between 0 and 1 for thermal noise
   gaussNum generateGaussNumbers(0.f, 1.f);
   std::for_each(rand.begin(), rand.end(), [&](double& val) {val = generateGaussNumbers(0);});
+
+  #pragma omp parallel for
   for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll(MAXDIM)
 		for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->force[pId * sp_->nDim + dim] += noise * rand[pId * sp_->nDim + dim] - gamma * sp_->vel[pId * sp_->nDim + dim];
     }
@@ -45,7 +52,9 @@ void Integrator::updateThermalVel() {
 }
 
 void Integrator::updateVelocity(double timeStep) {
+  #pragma omp parallel for
   for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll(MAXDIM)
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] += timeStep * sp_->force[pId * sp_->nDim + dim] / mass;
     }
@@ -53,7 +62,9 @@ void Integrator::updateVelocity(double timeStep) {
 }
 
 void Integrator::updatePosition(double timeStep) {
+  #pragma omp parallel for
   for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll(MAXDIM)
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->pos[pId * sp_->nDim + dim] += timeStep * sp_->vel[pId * sp_->nDim + dim];
     }
@@ -65,6 +76,7 @@ void Integrator::conserveMomentum() {
   std::vector<double> vel_y(sp_->vel.size() / 2);
   std::vector<long> idx(sp_->vel.size() / 2);
   std::iota(idx.begin(), idx.end(), 0);  // Generate sequence 0, 1, 2, ..., vel.size()/2 - 1
+  #pragma omp parallel
   for (size_t i = 0; i < idx.size(); ++i) {
       vel_x[i] = sp_->vel[idx[i] * 2];  // Manually gather every even element from vel
       vel_y[i] = sp_->vel[idx[i] * 2 + 1];  // Manually gather every odd element from vel
@@ -72,14 +84,15 @@ void Integrator::conserveMomentum() {
   double meanVelx = std::reduce(vel_x.begin(), vel_x.end(), double(0), std::plus<double>()) / sp_->numParticles;
   double meanVely = std::reduce(vel_y.begin(), vel_y.end(), double(0), std::plus<double>()) / sp_->numParticles;
 
+  #pragma omp parallel for
   for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll(MAXDIM)
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] -= ((1 - dim) * meanVelx + dim * meanVely);
     }
   }
 }
 
-//************************* soft particle langevin ***************************//
 void Integrator::integrateLangevin() {
   updateVelocity(0.5 * sp_->dt);
   updatePosition(sp_->dt);
@@ -98,10 +111,36 @@ void Integrator::integrateNVE() {
   updateVelocity(0.5 * sp_->dt);
 }
 
+//**************** soft particle nve with velocity rescaling *****************//
+void Integrator::scaleVelocity() {
+  double scale = sqrt(temp / sp_->getTemperature());
+
+  #pragma omp parallel for
+  for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll (MAXDIM)
+		for (long dim = 0; dim < sp_->nDim; dim++) {
+      sp_->vel[pId * sp_->nDim + dim] *= scale;
+    }
+  }
+}
+
+void Integrator::integrateNVERescale() {
+  injectKineticEnergy();
+  updateVelocity(0.5 * sp_->dt);
+  updatePosition(sp_->dt);
+  sp_->checkNeighbors();
+  sp_->calcForceEnergy();
+  updateVelocity(0.5 * sp_->dt);
+}
+
+//************************ soft particle Nose Hoover **************************//
 void Integrator::firstVelUpdateNH(double timeStep) {
   // update nose hoover damping
   gamma += (timeStep / (2 * mass)) * (sp_->getKineticEnergy() - (sp_->nDim * sp_->numParticles + 1) * temp / 2);
+
+  #pragma omp parallel for
   for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll(MAXDIM)
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] += timeStep * (sp_->force[pId * sp_->nDim + dim] - sp_->vel[pId * sp_->nDim + dim] * gamma);
     }
@@ -111,14 +150,16 @@ void Integrator::firstVelUpdateNH(double timeStep) {
 void Integrator::secondVelUpdateNH(double timeStep) {
   // update nose hoover damping
   gamma += (sp_->dt / (2 * mass)) * (sp_->getKineticEnergy() - (sp_->nDim * sp_->numParticles + 1) * temp / 2);
+
+  #pragma omp parallel for
   for (long pId = 0; pId < sp_->numParticles; pId++) {
+    #pragma unroll(MAXDIM)
     for (long dim = 0; dim < sp_->nDim; dim++) {
       sp_->vel[pId * sp_->nDim + dim] = (sp_->vel[pId * sp_->nDim + dim] + timeStep * sp_->force[pId * sp_->nDim + dim]) / (1 + timeStep * gamma);
     }
   }
 }
 
-//************************ soft particle Nose Hoover **************************//
 void Integrator::integrateNH() {
   firstVelUpdateNH(0.5 * sp_->dt);
   updatePosition(sp_->dt);

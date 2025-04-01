@@ -70,6 +70,18 @@ public:
     energyFile << setprecision(precision) << etot / numParticles << endl;
   }
 
+  void saveEnergyISF(long step, double timeStep, long numParticles, double waveNum) {
+    double epot = sp_->getPotentialEnergy();
+    double ekin = sp_->getKineticEnergy();
+    double etot = epot + ekin;
+    energyFile << step + 1 << "\t" << (step + 1) * timeStep << "\t";
+    energyFile << setprecision(precision) << epot / numParticles << "\t";
+    energyFile << setprecision(precision) << ekin / numParticles << "\t";
+    energyFile << setprecision(precision) << etot / numParticles << "\t";
+    double isoISF = sp_->getIsotropicISF(waveNum);
+    energyFile << setprecision(precision) << isoISF << endl;
+  }
+
   //////////////////////////// write this function in array form ////////////////////////////
   double read0DFile(string fileName) {
     double data;
@@ -361,13 +373,17 @@ public:
 
   void saveNeighbors(string dirName) {
     if(sp_->simControl.neighborType == simControlStruct::neighborEnum::neighbor) {
-      save2DIndexFile(dirName + "neighbors.dat", sp_->getNeighbors(), sp_->neighborListSize);
+      if(sp_->neighborListSize > 0) {
+        save2DIndexFile(dirName + "neighbors.dat", sp_->getNeighbors(), sp_->neighborListSize);
+      }
     }
   }
 
   void saveVicsekNeighbors(string dirName) {
     if(sp_->simControl.particleType == simControlStruct::particleEnum::vicsek) {
-      save2DIndexFile(dirName + "vicsekNeighbors.dat", sp_->getVicsekNeighbors(), sp_->vicsekNeighborListSize);
+      if(sp_->vicsekNeighborListSize > 0) {
+        save2DIndexFile(dirName + "vicsekNeighbors.dat", sp_->getVicsekNeighbors(), sp_->vicsekNeighborListSize);
+      }
     }
   }
 

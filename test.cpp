@@ -4,6 +4,7 @@
 //
 // Testing simulation for pair interactions between particles.
 // Tests are run for 2 and 3 particles with different potentials.
+// Input directory is argv[1], es. mkdir test2/
 //
 // Include C++ header files
 
@@ -27,7 +28,7 @@ int main(int argc, char **argv) {
   // boolean variables for simulation setup
   bool read = false, readState = false, saveFinal = false, linSave = true;
   // boolean variables for potential type and force calculation
-  bool doublelj = false, lj = false, wca = false, alltoall = true;
+  bool doublelj = false, lj = false, wca = false, alltoall = false;
   // initialization variables
   long numParticles = atol(argv[2]), maxStep = atof(argv[3]), nDim = 2, num1 = 1;
   cout << "Number of particles: " << numParticles << endl;
@@ -65,6 +66,8 @@ int main(int argc, char **argv) {
   // Neighbor type setting
   if(alltoall == true) {
     sp.setNeighborType(simControlStruct::neighborEnum::allToAll);
+  } else {
+    cout << "Setting neighbor type: neighbor" << endl;
   }
 
   // Input and output

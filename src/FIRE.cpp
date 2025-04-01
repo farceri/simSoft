@@ -47,7 +47,10 @@ void FIRE::initMinimizer(double a_start_, double f_dec_, double f_inc_, double f
 // update position and velocity in response to an applied force
 void FIRE::updatePositionAndVelocity() {
 	double totalForce(0);
+
+	#pragma omp parallel for reduction(+:totalForce)
 	for (long pId = 0; pId < sp_->numParticles; pId++) {
+		#pragma unroll(MAXDIM)
 		for (long dim = 0; dim < sp_->nDim; dim++) {
 			sp_->vel[pId * sp_->nDim + dim] += 0.5 * fire_dt * sp_->force[pId * sp_->nDim + dim] / mass[pId * sp_->nDim + dim];
 			sp_->pos[pId * sp_->nDim + dim] += fire_dt * sp_->vel[pId * sp_->nDim + dim];
@@ -55,7 +58,9 @@ void FIRE::updatePositionAndVelocity() {
 		}
 	}
 	if (totalForce == 0) {
+		#pragma omp parallel for
 		for (long pId = 0; pId < sp_->numParticles; pId++) {
+			#pragma unroll(MAXDIM)
 			for (long dim = 0; dim < sp_->nDim; dim++) {
 				sp_->vel[pId * sp_->nDim + dim] = 0;
 			}
@@ -66,14 +71,19 @@ void FIRE::updatePositionAndVelocity() {
 // update velocity in response to an applied force and return the maximum displacement in the previous step
 void FIRE::updateVelocity() {
 	double totalForce(0);
+
+	#pragma omp parallel for reduction(+:totalForce)
 	for (long pId = 0; pId < sp_->numParticles; pId++) {
+		#pragma unroll(MAXDIM)
 		for (long dim = 0; dim < sp_->nDim; dim++) {
 			sp_->vel[pId * sp_->nDim + dim] += 0.5 * fire_dt * sp_->force[pId * sp_->nDim + dim] / mass[pId * sp_->nDim + dim];
 			totalForce += sp_->force[pId * sp_->nDim + dim];
 		}
 		//If the total force on a particle is zero, then zero out the velocity as well
 		if (totalForce == 0) {
+			#pragma omp parallel for
 			for (long pId = 0; pId < sp_->numParticles; pId++) {
+				#pragma unroll(MAXDIM)
 				for (long dim = 0; dim < sp_->nDim; dim++) {
 					sp_->vel[pId * sp_->nDim + dim] = 0;
 				}
@@ -112,21 +122,22 @@ void FIRE::bendVelocityTowardsForce() {
 	} else {
 		double velForceNormRatio = sqrt(velNormSquared / forceNormSquared);
 		double func_a(a);
-		double* pVel = sp_->vel.data();
-		const double* pForce = sp_->force.data();
 		
-		auto perDOFBendParticleVelocity = [&](long i) {
-			pVel[i] = (1 - func_a) * pVel[i] + func_a * pForce[i] * velForceNormRatio;
-		};
-
-		std::for_each(sp_->vel.begin(), sp_->vel.end(), [&, i = 0](double&) mutable { perDOFBendParticleVelocity(i++); });
+		// if the velocity is too large, then reduce the bending
+		#pragma omp parallel for
+		for (long i = 0; i < sp_->numParticles * sp_->nDim; i++) {
+			sp_->vel[i] = (1 - func_a) * sp_->vel[i] + func_a * sp_->force[i] * velForceNormRatio;
+		}
 	}
 }
 
 // set the mass for each degree of freedom
 void FIRE::setMass() {
 	mass.resize(sp_->numParticles * sp_->nDim);
+
+	#pragma omp parallel for
 	for (long pId = 0; pId < sp_->numParticles; pId++) {
+		#pragma unroll(MAXDIM)
 		for (long dim = 0; dim < sp_->nDim; dim++) {
 			mass[pId * sp_->nDim + dim] = PI / (sp_->rad[pId] * sp_->rad[pId]);
 		}
