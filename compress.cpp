@@ -7,6 +7,9 @@
 // Each compression step consists of running dynamics for maxStep and then shrink the simulation box.
 // Input directory is argv[1], es. mkdir samples/
 //
+// Sample run
+// ./compress /path/to/directory/twoSpecies/samples/ 1024 2 1e-04 1e-03 4 1
+//
 // Include C++ header files
 
 #include "include/simSoft.h"

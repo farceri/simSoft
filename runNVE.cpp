@@ -8,6 +8,9 @@
 // Setup 3: run and save in the same directory readAndMakeNewDir = false, readAndSaveSameDir = true, runDynamics = false
 // Setup 4: make a dynamics/ directory and run readAndMakeNewDir = false, readAndSaveSameDir = true, runDynamics = true
 //
+// Sample run with Setup 1
+// ./runNVE /path/to/directory/twoSpecies/samples/0.720/ 1024 2 0 1e05 1e-04 0 0
+//
 // Include C++ header files
 
 #include "include/simSoft.h"
