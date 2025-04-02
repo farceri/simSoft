@@ -170,7 +170,7 @@ def plotPacking(dirName, figureName, quiver=False, lj=False, shiftx=0, shifty=0,
     else:
         figureName = '/home/francesco/Pictures/soft/packings/' + figureName + '.png'
     plt.tight_layout()
-    plt.savefig(figureName, transparent=False)
+    plt.savefig(figureName, transparent=True, format='png')
     plt.show()
 
 ########################## check energy conservation ##########################

@@ -567,8 +567,8 @@ void simSoft::addSelfPropulsion() {
       }
     }
   } else if(nDim == 3) {
-    randNum generateRandNumbers(-PI, PI);
-    std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateRandNumbers(0);});
+    gaussNum generateGaussNumbers(0.f, 1.f);
+    std::for_each(randAngle.begin(), randAngle.end(), [&](double& val) {val = generateGaussNumbers(0);});
 
     #pragma omp parallel for
     for (long pId = 0; pId < numParticles; pId++) {
