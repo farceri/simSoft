@@ -83,7 +83,7 @@ if __name__ == "__main__":
     ax.set_xlim(bins[0], bins[-1])
     ax.set_ylim(0, 2.5)
     for i in range(num_steps):
-        pos += dt * (-(pos - mu) / tau) + sigma * np.sqrt(2. * dt/ tau) * np.random.randn(ntrials)
+        pos += (mu - pos) * dt / tau + sigma * np.sqrt(2. * dt / tau) * np.random.randn(ntrials)
         traj[:,i] = pos
         #MDS += (pos - mu)**2
         #saveMDS[:,i] = MDS
