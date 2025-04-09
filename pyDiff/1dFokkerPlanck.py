@@ -7,10 +7,10 @@ import sys
 
 '''
 Script to compute trajectories of random walkers and make histograms of the displacement pdf
-Example usage: python3 randomWalk1D.py animate 10000
+Example usage: python3 randomWalk1D.py animate 10000 /path/to/figureName
 '''
 
-def makeAnimation(num_frames, traj, x, bins, mu, tau, dt, sigma):
+def makeAnimation(num_frames, traj, x, bins, mu, tau, dt, sigma, figureName):
     # This function makes an animation of the position pdf
     # Arguments: (num_frames) Number of frames in the animation
     # (traj) array of trajectories, typically numpy.array()
@@ -20,25 +20,29 @@ def makeAnimation(num_frames, traj, x, bins, mu, tau, dt, sigma):
 
     # Set figure settings
     figs, axs = plt.subplots(figsize=(5,4), dpi=120)
-    axs.set_xlim(bins[0], bins[-1])
-    axs.set_ylim(0, 5)
 
     def update(frame):
         axs.clear()
         axs.set_xlim(bins[0], bins[-1])
         axs.set_ylim(0, 2.5)
-        hist, _ = np.histogram(traj[:,frame], bins=bins, density=True)
+        hist, _ = np.histogram(traj[:,frame + 1], bins=bins, density=True)
         axs.plot((bins[1:] + bins[:-1]) / 2, hist)
-        y = norm.pdf(x, mu * (1 - np.exp(-frame * dt / tau)), sigma**2 * np.sqrt(2) * (1 - np.exp(-2 * frame * dt / tau)))
+        y = norm.pdf(x, mu * (1 - np.exp(-(frame + 1) * dt / tau)), sigma**2 * np.sqrt(2) * (1 - np.exp(-2 * (frame + 1) * dt / tau)))
         axs.plot(x, y) 
-        axs.set_title(f'Time: {frame*dt:.4f}', fontsize=12)
-        axs.set_xlabel("$Position,$ $x$")
-        axs.set_ylabel("$PDF(x)$")
+        axs.set_title(f'Time: {(frame + 1) * dt:.4f}', fontsize=12)
+        axs.set_xlim(bins[0], bins[-1])
+        axs.set_ylim(0, 2.5)
+        axs.set_xlabel("$Position,$ $x$", fontsize=14)
+        axs.set_ylabel("$PDF(x)$", fontsize=14)
         plt.tight_layout()
         return axs.artists
     
-    anim = animation.FuncAnimation(figs, update, frames=num_frames, interval=100, blit=False)
-    plt.show()
+    anim = animation.FuncAnimation(figs, update, frames=num_frames-1, interval=100, blit=False)
+    if(figureName != 0):
+        anim.save(f'{figureName}.mov', writer='ffmpeg', dpi=fig.dpi)
+        print("Saving animation as", figureName)
+    else:
+        plt.show()
 
 
 def plotSinglePDF(pos, x, bins, mu, tau, time, sigma):
@@ -53,9 +57,6 @@ def plotSinglePDF(pos, x, bins, mu, tau, time, sigma):
     ax.plot(centers, hist)
     y = norm.pdf(x, mu * (1 - np.exp(-time / tau)), sigma**2 * np.sqrt(2) * (1 - np.exp(-2 * time / tau)))
     ax.plot(x, y, color='r')
-    ax.set_xlabel("$Position,$ $x$")
-    ax.set_ylabel("$PDF(x)$")
-    plt.tight_layout()
 
 
 if __name__ == "__main__":
@@ -69,6 +70,7 @@ if __name__ == "__main__":
     print("Number of iterations:", num_steps)
     animate = sys.argv[1] # Flag for making animation
     ntrials = int(sys.argv[2]) # Number of realizations
+    figureName = sys.argv[3]
 
     pos = np.zeros(ntrials)
     #MDS = np.zeros(ntrials)
@@ -90,8 +92,14 @@ if __name__ == "__main__":
         if i in (5, 30, 90, 500):
             plotSinglePDF(pos, x, bins, mu, tau, i * dt, sigma)
     
+    ax.set_xlabel("$Position,$ $x$", fontsize=14)
+    ax.set_ylabel("$PDF(x)$", fontsize=14)
+    plt.tight_layout()
+    plt.pause(0.5)
+
     # Make the animation
     if animate == 'animate':
-        makeAnimation(num_steps, traj, x, bins, mu, tau, dt, sigma)
-    
-    plt.show()
+        print("Making animation")
+        makeAnimation(num_steps, traj, x, bins, mu, tau, dt, sigma, figureName)
+    else:
+        plt.show()
