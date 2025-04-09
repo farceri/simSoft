@@ -23,8 +23,6 @@ def makeAnimation(num_frames, traj, x, bins, mu, tau, dt, sigma, figureName):
 
     def update(frame):
         axs.clear()
-        axs.set_xlim(bins[0], bins[-1])
-        axs.set_ylim(0, 2.5)
         hist, _ = np.histogram(traj[:,frame + 1], bins=bins, density=True)
         axs.plot((bins[1:] + bins[:-1]) / 2, hist)
         y = norm.pdf(x, mu * (1 - np.exp(-(frame + 1) * dt / tau)), sigma**2 * np.sqrt(2) * (1 - np.exp(-2 * (frame + 1) * dt / tau)))
