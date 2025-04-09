@@ -20,24 +20,33 @@ def makeAnimation(num_frames, traj, x, bins, mu, tau, dt, sigma, figureName):
 
     # Set figure settings
     figs, axs = plt.subplots(figsize=(5,4), dpi=120)
+    # Need to repeat these settings for each frame
+    axs.set_xlim(bins[0], bins[-1])
+    axs.set_ylim(0, 2.5)
+    axs.set_xlabel("$Position,$ $x$", fontsize=14)
+    axs.set_ylabel("$PDF(x)$", fontsize=14)
+    axs.set_title(f'Time: {dt:.4f}', fontsize=12)
+    # Fit figure to plot settings
+    figs.tight_layout()
 
     def update(frame):
         axs.clear()
         hist, _ = np.histogram(traj[:,frame + 1], bins=bins, density=True)
-        axs.plot((bins[1:] + bins[:-1]) / 2, hist)
+        axs.plot((bins[1:] + bins[:-1]) / 2, hist, color='k')
         y = norm.pdf(x, mu * (1 - np.exp(-(frame + 1) * dt / tau)), sigma**2 * np.sqrt(2) * (1 - np.exp(-2 * (frame + 1) * dt / tau)))
-        axs.plot(x, y) 
-        axs.set_title(f'Time: {(frame + 1) * dt:.4f}', fontsize=12)
+        axs.plot(x, y, color='r', ls='--') 
         axs.set_xlim(bins[0], bins[-1])
         axs.set_ylim(0, 2.5)
         axs.set_xlabel("$Position,$ $x$", fontsize=14)
         axs.set_ylabel("$PDF(x)$", fontsize=14)
-        plt.tight_layout()
+        axs.set_title(f'Time: {(frame + 1) * dt:.4f}', fontsize=12)
+        
+        axs.legend(['Simulation', 'Fokker-Planck'], loc='upper right')
         return axs.artists
     
     anim = animation.FuncAnimation(figs, update, frames=num_frames-1, interval=100, blit=False)
     if(figureName != 0):
-        anim.save(f'{figureName}.mov', writer='ffmpeg', dpi=fig.dpi)
+        anim.save(f'{figureName}.mov', writer='ffmpeg', dpi=fig.dpi, fps=10)
         print("Saving animation as", figureName)
     else:
         plt.show()
@@ -52,9 +61,9 @@ def plotSinglePDF(pos, x, bins, mu, tau, time, sigma):
     # Compute pdf and plot it
     hist, edges = np.histogram(pos, bins=bins, density=True)
     centers = (edges[1:] + edges[:-1]) / 2
-    ax.plot(centers, hist)
+    ax.plot(centers, hist, color='k')
     y = norm.pdf(x, mu * (1 - np.exp(-time / tau)), sigma**2 * np.sqrt(2) * (1 - np.exp(-2 * time / tau)))
-    ax.plot(x, y, color='r')
+    ax.plot(x, y, color='r', ls='--')
 
 
 if __name__ == "__main__":
@@ -80,8 +89,6 @@ if __name__ == "__main__":
     bins = np.linspace(-2, 14, 500)
     x = np.linspace(bins[0], bins[-1], 1000)
     fig, ax = plt.subplots(figsize=(5, 4), dpi=120)
-    ax.set_xlim(bins[0], bins[-1])
-    ax.set_ylim(0, 2.5)
     for i in range(num_steps):
         pos += (mu - pos) * dt / tau + sigma * np.sqrt(2. * dt / tau) * np.random.randn(ntrials)
         traj[:,i] = pos
@@ -90,8 +97,11 @@ if __name__ == "__main__":
         if i in (5, 30, 90, 500):
             plotSinglePDF(pos, x, bins, mu, tau, i * dt, sigma)
     
+    ax.set_xlim(bins[0], bins[-1])
+    ax.set_ylim(0, 2.5)
     ax.set_xlabel("$Position,$ $x$", fontsize=14)
     ax.set_ylabel("$PDF(x)$", fontsize=14)
+    ax.legend(['Simulation', 'Fokker-Planck'], loc='upper right')
     plt.tight_layout()
     plt.pause(0.5)
 
