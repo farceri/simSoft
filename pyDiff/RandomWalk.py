@@ -39,6 +39,7 @@ UPDATE 20/04: Eseguiti test per capire se il resting time funziona: aggiunta la 
 
 
 TODO:
+    OTTIMIZZARE E FARE NUOVI TEST
     USARE SLOPE TEST
     CAPIRE CON GIT
     CAPIRE COME USARE IL PROGRAMMA PER FARE PREDIZIONI FISICHE SUL COEFFICIENTE DI DIFFUSIONE ETC...
@@ -720,7 +721,7 @@ def boundary_dependent_rest_prob(x, y, boundary_strength=0.5):
     base_prob = (1 - rest_prob) / 4
     return np.array([base_prob, base_prob, base_prob, base_prob, rest_prob])
 
-def corrected_gaussian_rest_prob(x, y, sigma=0.1, max_rest_strength=0.95):
+def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
     """
     Corrected Gaussian resting probability centered at the origin.
     Ensures the returned probabilities always sum to 1.0.
@@ -780,8 +781,8 @@ def corrected_gaussian_rest_prob(x, y, sigma=0.1, max_rest_strength=0.95):
 
 
 def main():
-    num_steps = 1000
-    num_trials = 10  # Set the number of independent trials
+    num_steps = 50000
+    num_trials = 1  # Set the number of independent trials
     time = np.arange(num_steps + 1)
 
     # Store MSD results for each trial
