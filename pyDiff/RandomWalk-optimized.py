@@ -65,6 +65,121 @@ TODO:
     NUMBA(?)
 
 '''
+
+
+@numba.njit(cache=True)
+def _run_disordered_step_numba(
+    positions, # Current positions (num_walkers, 2)
+    step_size, # float
+    precomputed_probs, # (ny, nx, 5) float32 array
+    x_min_grid, y_min_grid, dx, dy, nx, ny # Grid parameters
+    ):
+    """
+    Numba kernel for performing one step of disordered walk for all walkers.
+    Uses precomputed probabilities and fast grid indexing.
+    """
+    num_walkers = positions.shape[0]
+    # Create array for steps taken in this timestep
+    steps = np.zeros_like(positions) # Ensures same shape and dtype
+
+    for i in range(num_walkers):
+        # Get current position of walker i
+        current_x = positions[i, 0]
+        current_y = positions[i, 1]
+
+        # Get grid index using the Numba-compatible fast calculation
+        y_idx, x_idx = _calculate_grid_index_fast_numba(
+            current_x, current_y,
+            x_min_grid, y_min_grid, dx, dy, nx, ny)
+
+        # Lookup probabilities
+        # Numba handles array indexing efficiently
+        probabilities = precomputed_probs[y_idx, x_idx, :]
+        rest_prob = probabilities[4]
+
+        # Decide whether to move or rest
+        if np.random.rand() >= rest_prob:
+            # If moving, choose direction based on move probabilities
+            direction_probs = probabilities[:4] # Slice for [+x, -x, +y, -y]
+            direction_probs_sum = np.sum(direction_probs)
+
+            if direction_probs_sum > 1e-9: # Check sum before normalizing
+                # Manual implementation of np.random.choice with p
+                # Generate one random number for choice
+                choice_rand = np.random.rand() * direction_probs_sum # Scale by sum
+
+                # Cumulative sum check
+                p_plus_x = direction_probs[0]
+                p_minus_x = direction_probs[1]
+                p_plus_y = direction_probs[2]
+                # p_minus_y = direction_probs[3] # Not needed for check
+
+                if choice_rand < p_plus_x:
+                    direction_choice = 0 # +x
+                elif choice_rand < (p_plus_x + p_minus_x):
+                    direction_choice = 1 # -x
+                elif choice_rand < (p_plus_x + p_minus_x + p_plus_y):
+                    direction_choice = 2 # +y
+                else:
+                    direction_choice = 3 # -y
+
+                # Assign step based on choice
+                if direction_choice == 0: steps[i, 0] = step_size
+                elif direction_choice == 1: steps[i, 0] = -step_size
+                elif direction_choice == 2: steps[i, 1] = step_size
+                elif direction_choice == 3: steps[i, 1] = -step_size
+            # else: if sum is ~0, walker effectively rests (no step assigned)
+
+    # Return the steps calculated for all walkers
+    return steps
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def corrected_gaussian_rest_prob_vectorized(x, y, sigma=1.0, max_rest_strength=0.95, **kwargs):
+    """
+    Vectorized version: Calculates probabilities for all input x, y points.
+    x, y are expected to be NumPy arrays (like meshgrids xv, yv).
+    Returns an array of shape (*x.shape, 5).
+    CORRECTED: Uses np.minimum instead of Python min.
+    """
+    # Use np.minimum for compatibility with potential array operations
+    max_rest_strength = np.minimum(max_rest_strength, 1.0)
+
+    # These operations work element-wise on arrays x, y
+    rest_prob = max_rest_strength * np.exp(-(x**2 + y**2) / (2 * sigma**2))
+    rest_prob = np.clip(rest_prob, 0.0, 1.0)
+
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / 4.0) # np.maximum is correct
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., 0] = move_prob_each
+    probs[..., 1] = move_prob_each
+    probs[..., 2] = move_prob_each
+    probs[..., 3] = move_prob_each
+    probs[..., 4] = rest_prob
+
+    return probs
+
+
+
+
 @numba.njit(cache=True)
 def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, ny):
     """
@@ -109,7 +224,7 @@ def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, n
 class RandomWalk:
     def __init__(self, interpolation=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
                  xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
-                 yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001):
+                 yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95}):
         self.num_walkers = num_walkers
         self.num_steps = num_steps
         self.xv = xv
@@ -151,11 +266,96 @@ class RandomWalk:
         self.all_positions = [np.copy(self.positions)]
         self.time = np.arange(self.num_steps + 1)
         self.disorder_function = disorder_function if disorder_function is not None else self._default_disorder_function
+        self.disorder_params = disorder_params if disorder_params is not None else {}
+
+        self.precomputed_probs = None
+        # Call precomputation if not using default
+        if self.disorder_function != self._default_disorder_function:
+            print(f"Precomputing probabilities using {self.disorder_function.__name__}...")
+            self._precompute_probabilities()
+            if self.precomputed_probs is not None:
+                print("Precomputation finished.")
+            else:
+                print("Precomputation failed.")
         self.x_min = np.min(self.xv)
         self.x_max = np.max(self.xv)
         self.y_min = np.min(self.yv)
         self.y_max = np.max(self.yv)
         self.out_of_bounds_walkers = set()
+
+    def _precompute_probabilities(self):
+        """
+        Calls the vectorized self.disorder_function to precompute probabilities.
+        MODIFIED WITH DEBUGGING PRINTS.
+        """
+        if not callable(self.disorder_function):
+            print("Warning: No valid disorder function provided for precomputation.")
+            self.precomputed_probs = None
+            return
+
+        print(f"Attempting precomputation with {self.disorder_function.__name__}...")
+        print(f"  Input xv shape: {self.xv.shape}, dtype: {self.xv.dtype}")
+        print(f"  Input yv shape: {self.yv.shape}, dtype: {self.yv.dtype}")
+        print(f"  Disorder params: {self.disorder_params}")
+
+        try:
+            # --- Step 1: Call the disorder function ---
+            print("  Calling disorder function...")
+            result_probs = self.disorder_function(
+                self.xv, self.yv, **self.disorder_params
+            )
+            print("  Disorder function call finished.")
+            print(
+                f"  Function returned type: {type(result_probs)}, shape: {getattr(result_probs, 'shape', 'N/A')}, dtype: {getattr(result_probs, 'dtype', 'N/A')}")
+
+            # --- Step 2: Check for obvious issues before type conversion ---
+            if isinstance(result_probs, np.ndarray):
+                print(f"  Checking result array for NaNs: {np.isnan(result_probs).any()}")
+                print(f"  Checking result array for Infs: {np.isinf(result_probs).any()}")
+            else:
+                print("  Result is not a NumPy array!")
+                raise TypeError("Disorder function did not return a NumPy array.")
+
+            # --- Step 3: Convert type ---
+            print(f"  Attempting type conversion to np.float32...")
+            self.precomputed_probs = result_probs.astype(np.float32)
+            print(
+                f"  Type conversion successful. Shape: {self.precomputed_probs.shape}, dtype: {self.precomputed_probs.dtype}")
+
+            # --- Step 4: Check shape ---
+            expected_shape = (self.ny, self.nx, 5)
+            if self.precomputed_probs.shape != expected_shape:
+                raise ValueError(
+                    f"Precomputed probs have wrong shape: {self.precomputed_probs.shape}. Expected: {expected_shape}")
+            print("  Shape check successful.")
+
+        except Exception as e:
+            print(
+                f"***** ERROR during precomputation with {self.disorder_function.__name__}: {e} *****")  # Make error stand out
+            import traceback
+            traceback.print_exc()  # Print the full traceback where the error occurred
+            print("Precomputation failed. Check if the disorder function is vectorized correctly.")
+            self.precomputed_probs = None  # Ensure it's None if failed
+
+        # Optional sanity check can remain here if desired
+        if self.precomputed_probs is not None:
+            print("  Running final sum check...")
+            sums = np.sum(self.precomputed_probs, axis=2)
+            if not np.allclose(sums, 1.0):
+                print("  Warning: Precomputed probabilities do not sum to 1 everywhere!")
+            else:
+                print("  Final sum check passed.")
+
+
+
+
+
+
+
+
+
+
+
 
     def apply_pbc(self):
         """Apply periodic boundary conditions to keep particles inside the simulation box."""
@@ -282,64 +482,41 @@ class RandomWalk:
     """
 
     def random_walk_disordered(self):
-        #print("--- random_walk_disordered ---")
-        #print(f"  Using disorder_function: {self.disorder_function.__name__}")
+        """
+        Performs one step of disordered random walk.
+        MODIFIED: Calls the Numba kernel. Modifies self.positions in place.
+        """
+        if not self.is_uniform_grid:
+            # Numba kernel currently assumes fast indexing works
+            # Fallback to slower Python loop if needed, or adapt Numba kernel
+             print("Warning: Disordered walk called Numba kernel, but grid is not uniform. Falling back (or error).")
+             # Implement fallback or raise error
+             # For now, let's assume uniform grid check ensures this won't happen wrongly
+             # Or call a potentially slower Python loop version here
+             raise NotImplementedError("Numba kernel requires uniform grid for fast indexing.")
 
-        steps = np.zeros((self.num_walkers, 2))
 
-        for i in range(self.num_walkers):
+        if self.precomputed_probs is None and self.disorder_function != self._default_disorder_function:
+             raise ValueError("Precomputed probabilities requested but not available.")
 
-            '''
-            print(f"  --- Walker {i} ---")
-            current_pos = self.positions[i]
-            print(f"    current_pos: {current_pos}")
-            '''
+        if self.precomputed_probs is not None:
+             # Call the Numba kernel
+             calculated_steps = _run_disordered_step_numba(
+                 self.positions, # Pass current positions
+                 self.step,      # Pass step size
+                 self.precomputed_probs, # Pass precomputed table
+                 # Pass grid parameters needed by index function:
+                 self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
+             )
+             # Update positions using the steps returned by Numba kernel
+             self.positions += calculated_steps
+        else:
+             # Handle default case (no disorder, use ordered walk?)
+             # This branch might be unnecessary if default uses random_walk_ordered
+             self.random_walk_ordered() # Or implement default logic if needed
 
-            # y_idx, x_idx = self._get_grid_index(self.positions[i, 0], self.positions[i, 1])
-            y_idx, x_idx = self._get_grid_index(self.positions[i, 0], self.positions[i, 1])
-
-            # DEBUGGING
-            '''
-            print(f"    y_idx: {y_idx}, x_idx: {x_idx}")
-            grid_value_x = self.xv[y_idx, x_idx]
-            grid_value_y = self.yv[y_idx, x_idx]
-            print(f"    grid_value_x: {grid_value_x}, grid_value_y: {grid_value_y}")
-            '''
-
-            probabilities = self.disorder_function(self.xv[y_idx, x_idx], self.yv[y_idx, x_idx])
-
-            # Ensure probabilities are valid
-            if len(probabilities) != 5 or not np.isclose(probabilities.sum(), 1.0) or np.any(probabilities < 0):
-                probabilities = self._default_disorder_function(self.xv[y_idx, x_idx], self.yv[y_idx, x_idx])
-
-            rest_prob = probabilities[4]
-
-            if np.random.rand() >= rest_prob:
-                direction_probs = probabilities[:4]
-                direction_probs_sum = np.sum(direction_probs)
-
-                if direction_probs_sum > 0:  # Avoid division by zero
-                    direction_probs_normalized = direction_probs / direction_probs_sum
-                else:
-                    direction_probs_normalized = np.array([0.25, 0.25, 0.25, 0.25])  # Default uniform
-
-                direction_choice = np.random.choice(4, p=direction_probs_normalized)
-                # direction_choice = np.random.choice(4, p=probabilities[:4])
-
-                if direction_choice == 0:  # +x
-                    steps[i, 0] = self.step
-                elif direction_choice == 1:  # -x
-                    steps[i, 0] = -self.step
-                elif direction_choice == 2:  # +y
-                    steps[i, 1] = self.step
-                elif direction_choice == 3:  # -y
-                    steps[i, 1] = -self.step
-
-                self.positions[i] += steps[i]  # Update position for THIS walker ONLY
-
-            # self.apply_pbc()
-
-        return self.positions
+        # Apply PBC if needed
+        # self.apply_pbc()
 
     def random_walk_disordered_interpolated(self):
         """
@@ -474,20 +651,49 @@ class RandomWalk:
             print("Out-of-bounds walker indices:", out_of_bounds)
             self.out_of_bounds_walkers.update(out_of_bounds)  # Update the set
 
-    def trajectories(self, use_disorder=False, intepolation=False):
-        self.all_positions = [np.copy(self.initial_positions)]  # Reset positions
-        for _ in range(self.num_steps):
+    def trajectories(self, use_disorder=False): # Removed interpolation flag for now
+        """
+        Runs the simulation loop.
+        MODIFIED to optionally avoid storing all positions.
+        """
+        # --- Option 1: Store all positions (Original) ---
+        # self.all_positions = [np.copy(self.initial_positions)]
+        # self.positions = np.copy(self.initial_positions) # Reset positions
+        # for _ in range(self.num_steps):
+        #     if use_disorder:
+        #          self.random_walk_disordered()
+        #     else:
+        #          self.random_walk_ordered() # Ensure this exists/is optimized
+        #     self.all_positions.append(np.copy(self.positions))
+        # self.all_positions = np.array(self.all_positions)
+        # return self.all_positions
+        # -----------------------------------------------
+
+        # --- Option 2: Compute MSD relevant info on the fly (More memory efficient) ---
+        # Need initial positions and sum of squared displacements at each step
+        self.positions = np.copy(self.initial_positions) # Reset positions
+        # Store only MSD results instead of all positions
+        self.msd_results = np.zeros(self.num_steps + 1)
+        self.msd_results[0] = 0.0
+        # Or store sum_sq_displacement if calculating components separately
+        # sum_sq_disp = np.zeros(self.num_steps + 1)
+
+        for step_num in range(1, self.num_steps + 1):
             if use_disorder:
-                if intepolation:
-                    self.random_walk_ordered()
-                else:
-                    self.random_walk_disordered()
+                 self.random_walk_disordered() # This updates self.positions
             else:
-                self.random_walk_ordered()
-            # self._check_out_of_bounds(self.positions)
-            self.all_positions.append(np.copy(self.positions))
-        self.all_positions = np.array(self.all_positions)
-        return self.all_positions
+                 self.random_walk_ordered() # Ensure this exists/is optimized
+
+            # Calculate MSD at this step
+            displacement = self.positions - self.initial_positions
+            sq_displacement = np.sum(displacement**2, axis=1) # Summing (x^2 + y^2) for each walker
+            self.msd_results[step_num] = np.mean(sq_displacement) # Average over walkers
+
+        # Now self.msd_results contains the final MSD array
+        print("Simulation finished. MSD calculated.")
+        # If you need self.all_positions later, you must use Option 1
+        # --------------------------------------------------------------------
+
 
     '''
     def ordered_trajectories(self):
@@ -553,30 +759,30 @@ class RandomWalk:
     def compute_msd(self, direction='all'):
         """
         Compute the mean squared displacement over time.
-
-        Args:
-            direction (str, optional): The direction along which to calculate the MSD.
-                Options are 'x', 'y', or 'all' (default).
-
-        Returns:
-            numpy.ndarray: The mean squared displacement over time.
-
-            plottare log log il msd
+        MODIFIED: Returns pre-calculated results if available,
+                  otherwise calculates from self.all_positions (if stored).
         """
-        all_positions_array = np.array(self.all_positions)
-        displacement = all_positions_array - self.initial_positions[np.newaxis, :, :]
-
-        if direction == 'x':
-            squared_displacement = displacement[:, :, 0] ** 2  # Only x-component
-        elif direction == 'y':
-            squared_displacement = displacement[:, :, 1] ** 2  # Only y-component
-        elif direction == 'all':
-            squared_displacement = np.sum(displacement ** 2, axis=2)  # Both x and y
+        if hasattr(self, 'msd_results') and direction == 'all':
+            # Return the result computed during trajectories() if Option 2 was used
+            return self.msd_results
+        elif hasattr(self, 'all_positions') and self.all_positions:
+            # Fallback to original calculation if all positions were stored
+            print("Calculating MSD from stored positions...")
+            all_positions_array = np.array(self.all_positions)
+            displacement = all_positions_array - self.initial_positions[np.newaxis, :, :]
+            # ... (rest of your original MSD calculation for different directions) ...
+            if direction == 'x':
+                squared_displacement = displacement[:, :, 0] ** 2
+            elif direction == 'y':
+                squared_displacement = displacement[:, :, 1] ** 2
+            elif direction == 'all':
+                squared_displacement = np.sum(displacement ** 2, axis=2)
+            else:
+                raise ValueError("Invalid direction. Choose 'x', 'y', or 'all'.")
+            msd = np.mean(squared_displacement, axis=1)
+            return msd
         else:
-            raise ValueError("Invalid direction. Choose 'x', 'y', or 'all'.")
-
-        msd = np.mean(squared_displacement, axis=1)
-        return msd
+            raise ValueError("Cannot compute MSD. Run trajectories() first, either storing positions or calculating MSD on the fly.")
 
     def compute_D(self):
         """
@@ -915,7 +1121,7 @@ def main():
         rw_gaussian_rest.trajectories(use_disorder=True)
         msd_gaussian_rest_trials.append(rw_gaussian_rest.compute_msd())
         '''
-        rw_gaussian_rest_new = RandomWalk(disorder_function=corrected_gaussian_rest_prob, num_steps=num_steps)
+        rw_gaussian_rest_new = RandomWalk(disorder_function=corrected_gaussian_rest_prob_vectorized, num_steps=num_steps)
         rw_gaussian_rest_new.trajectories(use_disorder=True)
         msd_gaussian_rest_trials_new.append(rw_gaussian_rest_new.compute_msd())
         '''
