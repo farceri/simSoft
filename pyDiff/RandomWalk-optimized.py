@@ -3,6 +3,9 @@ import scipy as sp
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numba
+import multiprocessing # Import the module
+import time as timer # To time the execution
+import os # To potentially get CPU count
 
 '''
 
@@ -1085,6 +1088,128 @@ def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
 
 
 
+def run_single_trial(params):
+    """
+    Runs one full simulation trial and returns the MSD array.
+
+    Args:
+        params (tuple): A tuple containing all necessary parameters:
+                        (trial_index, num_steps, num_walkers, step, dt,
+                         disorder_function, disorder_params, xv, yv, seed)
+    Returns:
+        numpy.ndarray: The calculated MSD array for this trial, or None if error.
+    """
+    try:
+        # Unpack parameters
+        trial_index, num_steps, num_walkers, step, dt, \
+        disorder_function, disorder_params, xv, yv, seed = params
+
+        # --- CRITICAL: Set unique random seed for each process ---
+        np.random.seed(seed)
+        # ---------------------------------------------------------
+
+        print(f"Starting Trial {trial_index+1} (Seed: {seed})...") # Optional progress
+
+        # Instantiate RandomWalk
+        rw = RandomWalk(
+            num_steps=num_steps,
+            num_walkers=num_walkers,
+            step=step,
+            dt=dt,
+            xv=xv,
+            yv=yv,
+            disorder_function=disorder_function,
+            disorder_params=disorder_params
+        )
+
+        # Run simulation (assuming trajectories computes MSD on the fly)
+        use_disorder = (disorder_function != rw._default_disorder_function)
+        rw.trajectories(use_disorder=use_disorder)
+
+        # Get MSD results
+        msd_result = rw.compute_msd() # Should return self.msd_results
+
+        print(f"Finished Trial {trial_index+1}.") # Optional progress
+        return msd_result
+
+    except Exception as e:
+        print(f"!!! Error in Trial {trial_index+1}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None # Return None on error
+
+# --- Main function to manage parallel execution ---
+def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
+                  disorder_function, disorder_params, xv, yv):
+    """
+    Manages running multiple trials in parallel using multiprocessing.
+    """
+    start_time = timer.time()
+
+    # --- Determine number of worker processes ---
+    try:
+        # Use os.cpu_count() if available (Python 3.4+)
+        num_workers = os.cpu_count()
+        print(f"Detected {num_workers} CPU cores.")
+    except NotImplementedError:
+        # Fallback if cpu_count() is not available
+        num_workers = 4 # Or set a sensible default
+        print(f"cpu_count() not available, using {num_workers} workers.")
+    # You might want to use num_workers - 1 to leave a core free for system tasks
+    # num_workers = max(1, num_workers - 1)
+
+    # --- Prepare arguments for each trial ---
+    base_seed = np.random.randint(10000) # Generate a random base seed
+    task_args = []
+    for i in range(num_trials_total):
+        unique_seed = base_seed + i
+        task_args.append(
+            (i, num_steps, num_walkers, step, dt,
+             disorder_function, disorder_params, xv, yv, unique_seed)
+        )
+
+    print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes...")
+
+    # --- Create and run the pool ---
+    # 'spawn' context might be needed on macOS/Windows sometimes if 'fork' causes issues
+    # ctx = multiprocessing.get_context('spawn')
+    # pool = ctx.Pool(processes=num_workers)
+    pool = multiprocessing.Pool(processes=num_workers)
+
+    results = []
+    try:
+        # pool.map executes run_single_trial for each item in task_args
+        # It blocks until all tasks are complete
+        results = pool.map(run_single_trial, task_args)
+    except Exception as e:
+        print(f"!!! Error during parallel execution: {e}")
+    finally:
+        # --- Clean up the pool ---
+        pool.close() # No more tasks will be submitted
+        pool.join()  # Wait for all worker processes to finish
+
+    print(f"\nParallel execution finished. Time taken: {timer.time() - start_time:.2f} seconds")
+
+    # --- Process results ---
+    # Filter out any None results from failed trials
+    successful_results = [res for res in results if res is not None]
+
+    if not successful_results:
+        print("Error: No trials completed successfully!")
+        return None, None
+
+    num_successful = len(successful_results)
+    print(f"Number of successful trials: {num_successful} / {num_trials_total}")
+
+    # Average the MSD arrays
+    # Stack results into a 2D array (trials x time_steps)
+    msd_stack = np.stack(successful_results, axis=0)
+    # Calculate the mean across the trials axis (axis=0)
+    avg_msd = np.mean(msd_stack, axis=0)
+
+    time_axis = np.arange(num_steps + 1) # Create time axis
+
+    return avg_msd, time_axis
 
 
 
@@ -1093,8 +1218,7 @@ def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
 
 
 
-
-
+"""
 def main():
     num_steps = 1000
     num_trials = 1  # Set the number of independent trials
@@ -1367,7 +1491,74 @@ def main():
     plt.show()
     '''
     # rw.animate_trajectory(walker_index=0, interval=50)
-
+"""
 
 if __name__ == "__main__":
-    main()
+    # --- Simulation Parameters ---
+    NUM_TRIALS = 20 # Number of parallel trials
+    NUM_STEPS = 100000 # Number of steps per trial
+    NUM_WALKERS = 100
+    STEP_SIZE = 0.001
+    TIME_STEP_DT = 0.0001
+
+    # Define grid (consider making it smaller if memory/precomputation is slow)
+    grid_size = 2000 # Example: Use a smaller grid for testing
+    print(f"Setting up grid ({grid_size}x{grid_size})...")
+    XV, YV = np.meshgrid(np.linspace(-1, 1, grid_size), np.linspace(-1, 1, grid_size))
+    print("Grid setup done.")
+
+    # --- Select Disorder Function and Parameters ---
+    # Example: Corrected Gaussian
+    DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
+    DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
+
+    # Example: No disorder
+    # DISORDER_FUNC = None
+    # DISORDER_PARAMS = {}
+
+    # --- Run the parallel simulation ---
+    avg_msd, time_axis = main_parallel(
+        num_trials_total=NUM_TRIALS,
+        num_steps=NUM_STEPS,
+        num_walkers=NUM_WALKERS,
+        step=STEP_SIZE,
+        dt=TIME_STEP_DT,
+        disorder_function=DISORDER_FUNC,
+        disorder_params=DISORDER_PARAMS,
+        xv=XV,
+        yv=YV
+    )
+
+    # --- Plotting Results ---
+    if avg_msd is not None and time_axis is not None:
+        print("Plotting results...")
+        # Plot MSD/Time
+        fig1, ax1 = plt.subplots(figsize=(10, 6))
+        ax1.plot(time_axis[1:], avg_msd[1:] / time_axis[1:], label=f'{DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"}')
+        ax1.set_xlabel('Time Step')
+        ax1.set_ylabel('MSD / Time Step')
+        ax1.set_title(f'Avg Effective Diffusion Coefficient ({NUM_TRIALS} Trials)')
+        ax1.grid(True)
+        ax1.legend()
+        # Optionally set y-axis limits if needed, e.g., ax1.set_ylim(0, 1.2e-6)
+        plt.savefig("msd_over_time_parallel.png") # Save the plot
+
+        # Plot Log-Log MSD
+        fig2, ax2 = plt.subplots(figsize=(10, 6))
+        valid_indices = (time_axis > 0) & (avg_msd > 0) # For log plot
+        ax2.loglog(time_axis[valid_indices], avg_msd[valid_indices], label=f'{DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"}')
+        # Add slope=1 line for reference
+        if np.any(valid_indices):
+            first_msd = avg_msd[valid_indices][0]
+            first_time = time_axis[valid_indices][0]
+            slope_1_line = (first_msd / first_time) * time_axis[valid_indices]
+            ax2.loglog(time_axis[valid_indices], slope_1_line, 'r--', alpha=0.7, label='Slope=1 guide')
+
+        ax2.set_xlabel('Time Step')
+        ax2.set_ylabel('MSD')
+        ax2.set_title(f'Avg Mean Squared Displacement (Log-Log, {NUM_TRIALS} Trials)')
+        ax2.grid(True, which='both') # Grid on major and minor ticks for log scales
+        ax2.legend()
+        plt.savefig("msd_loglog_parallel.png") # Save the plot
+
+        plt.show() # Display plots
