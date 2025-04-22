@@ -65,6 +65,44 @@ TODO:
     NUMBA(?)
 
 '''
+@numba.njit(cache=True)
+def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, ny):
+    """
+    Calculates the nearest grid indices (y_idx, x_idx) for a point (x, y)
+    on a uniform grid using direct calculation. Numba-optimized. Uses min/max instead of np.clip.
+
+    Args:
+        x (float): x-coordinate of the point.
+        y (float): y-coordinate of the point.
+        x_min_grid (float): Minimum x-coordinate of the grid centers.
+        y_min_grid (float): Minimum y-coordinate of the grid centers.
+        dx (float): Grid spacing in x-direction (must be > 0).
+        dy (float): Grid spacing in y-direction (must be > 0).
+        nx (int): Number of grid points in x-direction.
+        ny (int): Number of grid points in y-direction.
+
+    Returns:
+        tuple[int, int]: The (y_index, x_index) of the nearest grid point.
+    """
+    fx = (x - x_min_grid) / dx
+    fy = (y - y_min_grid) / dy
+
+    # Round to nearest integer index
+    # Cast to int64 first to ensure integer type before potential clipping
+    x_index = np.int64(np.round(fx))
+    y_index = np.int64(np.round(fy))
+
+    # --- Use min/max instead of np.clip ---
+    # Ensure index is not less than 0
+    x_index = max(0, x_index)
+    y_index = max(0, y_index)
+
+    # Ensure index is not more than nx-1 or ny-1
+    x_index = min(x_index, nx - 1)
+    y_index = min(y_index, ny - 1)
+    # --------------------------------------
+
+    return y_index, x_index
 
 
 
@@ -76,6 +114,34 @@ class RandomWalk:
         self.num_steps = num_steps
         self.xv = xv
         self.yv = yv
+        self.ny, self.nx = self.xv.shape
+        # --- Setup for _get_grid_index_fast ---
+        # Check if grid is uniform and calculate parameters if possible
+        self.is_uniform_grid = False  # Flag
+        if self.nx > 1 and self.ny > 1:
+            self.x_coords = self.xv[0, :]
+            self.y_coords = self.yv[:, 0]
+            # Check for uniform spacing (within tolerance)
+            dxs = np.diff(self.x_coords)
+            dys = np.diff(self.y_coords)
+            if np.allclose(dxs, dxs[0]) and np.allclose(dys, dys[0]):
+                self.is_uniform_grid = True
+                self.x_min_grid = self.x_coords[0]
+                self.y_min_grid = self.y_coords[0]
+                self.dx = dxs[0]
+                self.dy = dys[0]
+                # Ensure dx/dy are not zero
+                self.dx = self.dx if abs(self.dx) > 1e-15 else 1.0
+                self.dy = self.dy if abs(self.dy) > 1e-15 else 1.0
+                print("Uniform grid detected. Using fast indexing.")
+            else:
+                print("Non-uniform grid detected. Will use robust indexing.")
+        elif self.nx == 1 or self.ny == 1:
+            # Handle 1D grid cases if necessary, or default to robust
+            print("Grid is 1D or single point. Using robust indexing.")
+            pass  # Fallback to robust indexing below
+        else:
+            print("Grid has zero dimensions? Using robust indexing.")
         self.box_size = np.array([xv.shape[0], yv.shape[0]])
         self.dt = dt
         self.positions = np.zeros((self.num_walkers, 2))
@@ -95,6 +161,53 @@ class RandomWalk:
         """Apply periodic boundary conditions to keep particles inside the simulation box."""
         self.positions = (self.positions + self.box_size / 2) % self.box_size - self.box_size / 2
 
+    def _get_grid_index(self, x, y):
+        """
+        Selects the appropriate grid index function based on uniformity.
+        """
+        if self.is_uniform_grid:
+            return self._get_grid_index_fast(x, y)
+        else:
+            # Fallback to the original robust method if grid is not uniform
+            # Ensure _get_grid_index_robust still exists
+            return self._get_grid_index_robust(x, y)
+
+    def _get_grid_index_robust(self, x, y):
+        """Find the indices of the nearest grid point in a robust way."""
+
+        # Calculate distances to all grid points
+        x_distances = np.abs(self.xv[0, :] - x)
+        y_distances = np.abs(self.yv[:, 0] - y)
+
+        # Find the indices of the minimum distances
+        x_index = np.argmin(x_distances)
+        y_index = np.argmin(y_distances)
+
+        # Robustness check (optional but recommended)
+        nearest_x = self.xv[0, x_index]
+        nearest_y = self.yv[y_index, 0]
+        distance = np.sqrt((nearest_x - x) ** 2 + (nearest_y - y) ** 2)
+        if distance > self.step * 1.1:  # Allow for small floating-point errors
+            print(f"WARNING: Large distance to nearest grid point: {distance}")
+            print(f"  x: {x}, y: {y}, nearest_x: {nearest_x}, nearest_y: {nearest_y}")
+
+        return y_index, x_index
+
+    def _get_grid_index_fast(self, x, y):
+        """
+        Wrapper method to call the Numba-optimized fast grid index calculation.
+        Assumes a uniform grid and that grid parameters are set in __init__.
+        """
+        # No need for the check here if we trust the flag set in __init__
+        # and only call this method when self.is_uniform_grid is True
+
+        # Call the external Numba function, passing instance attributes
+        return _calculate_grid_index_fast_numba(
+            x, y,
+            self.x_min_grid, self.y_min_grid,
+            self.dx, self.dy,
+            self.nx, self.ny
+        )
     """
     #DEBUGGING
     def random_walk_disordered(self):
@@ -183,7 +296,7 @@ class RandomWalk:
             '''
 
             # y_idx, x_idx = self._get_grid_index(self.positions[i, 0], self.positions[i, 1])
-            y_idx, x_idx = self._get_grid_index_robust(self.positions[i, 0], self.positions[i, 1])
+            y_idx, x_idx = self._get_grid_index(self.positions[i, 0], self.positions[i, 1])
 
             # DEBUGGING
             '''
@@ -308,32 +421,8 @@ class RandomWalk:
         """Default: Uniform probability distribution (no spatial disorder)."""
         return np.array([0.25, 0.25, 0.25, 0.25, 0])  # [+x, -x, +y, -y, rest]
 
-    def _get_grid_index(self, x, y):
-        """Find the indices of the nearest grid point."""
-        x_index = np.argmin(np.abs(np.linspace(-1, 1, self.xv.shape[1]) - x))
-        y_index = np.argmin(np.abs(np.linspace(-1, 1, self.yv.shape[0]) - y))
-        return y_index, x_index
 
-    def _get_grid_index_robust(self, x, y):
-        """Find the indices of the nearest grid point in a robust way."""
 
-        # Calculate distances to all grid points
-        x_distances = np.abs(self.xv[0, :] - x)
-        y_distances = np.abs(self.yv[:, 0] - y)
-
-        # Find the indices of the minimum distances
-        x_index = np.argmin(x_distances)
-        y_index = np.argmin(y_distances)
-
-        # Robustness check (optional but recommended)
-        nearest_x = self.xv[0, x_index]
-        nearest_y = self.yv[y_index, 0]
-        distance = np.sqrt((nearest_x - x) ** 2 + (nearest_y - y) ** 2)
-        if distance > self.step * 1.1:  # Allow for small floating-point errors
-            print(f"WARNING: Large distance to nearest grid point: {distance}")
-            print(f"  x: {x}, y: {y}, nearest_x: {nearest_x}, nearest_y: {nearest_y}")
-
-        return y_index, x_index
 
     def random_walk_ordered(self):
         """
@@ -801,7 +890,7 @@ def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
 
 
 def main():
-    num_steps = 50000
+    num_steps = 1000
     num_trials = 1  # Set the number of independent trials
     time = np.arange(num_steps + 1)
 
@@ -861,6 +950,7 @@ def main():
     #avg_msd_plateau = np.mean(msd_plateau_rest_trials, axis=0)
     #avg_msd_multi_center = np.mean(msd_multi_center_rest_trials, axis=0)
 
+    '''
     # Plotting averaged MSD on a log-log scale
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.loglog(time, avg_msd_no_rest, label='No Resting (rest_prob=0)')
@@ -894,7 +984,7 @@ def main():
     ax.grid(True)
     ax.legend()
     plt.show()
-
+    '''
     '''
     #TEST PER IL RESTING TIME
 
