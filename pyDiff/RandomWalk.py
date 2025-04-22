@@ -148,6 +148,8 @@ class RandomWalk:
     """
 
     def random_walk_disordered(self):
+        #print("--- random_walk_disordered ---")
+        #print(f"  Using disorder_function: {self.disorder_function.__name__}")
 
         steps = np.zeros((self.num_walkers, 2))
 
@@ -682,7 +684,7 @@ def uniform_rest_prob(x, y, rest_level=0.9):
                      rest_level])
 
 
-def plateau_rest_prob(x, y, plateau_radius=0.001, max_rest=0.9, decay_rate=5.0):
+def plateau_rest_prob(x, y, plateau_radius=0.001, max_rest=0.5, decay_rate=5.0):
     """Resting probability has a plateau near the origin."""
     distance_from_origin = np.sqrt(x ** 2 + y ** 2)
     if distance_from_origin <= plateau_radius:
@@ -695,8 +697,8 @@ def plateau_rest_prob(x, y, plateau_radius=0.001, max_rest=0.9, decay_rate=5.0):
 
 def multi_center_rest_prob(x, y):
     """High resting probability around multiple centers."""
-    center1_rest = 0.7 * np.exp(-5 * ((x - 0.001) ** 2 + (y - 0.001) ** 2))
-    center2_rest = 0.7 * np.exp(-5 * ((x + 0.001) ** 2 + (y + 0.001) ** 2))
+    center1_rest = 0.5 * np.exp(-5 * ((x - 0.001) ** 2 + (y - 0.001) ** 2))
+    center2_rest = 0.5 * np.exp(-5 * ((x + 0.001) ** 2 + (y + 0.001) ** 2))
     rest_prob = np.clip(center1_rest + center2_rest, 0, 0.9)
     base_prob = (1 - rest_prob) / 4
     return np.clip([base_prob, base_prob, base_prob, base_prob, rest_prob], 0, 1)
@@ -718,31 +720,94 @@ def boundary_dependent_rest_prob(x, y, boundary_strength=0.5):
     base_prob = (1 - rest_prob) / 4
     return np.array([base_prob, base_prob, base_prob, base_prob, rest_prob])
 
+def corrected_gaussian_rest_prob(x, y, sigma=0.1, max_rest_strength=0.95):
+    """
+    Corrected Gaussian resting probability centered at the origin.
+    Ensures the returned probabilities always sum to 1.0.
+
+    Args:
+        x (float): x-coordinate.
+        y (float): y-coordinate.
+        sigma (float): Standard deviation of the Gaussian distribution.
+        max_rest_strength (float): The maximum resting probability at the origin (must be <= 1).
+
+    Returns:
+        numpy.ndarray: Array of 5 probabilities [p(+x), p(-x), p(+y), p(-y), p(rest)]
+                       that sums to 1.0.
+    """
+    # Ensure max_rest_strength is valid
+    max_rest_strength = min(max_rest_strength, 1.0) # Cannot be more than 1
+
+    # Calculate the resting probability based on Gaussian decay
+    rest_prob = max_rest_strength * np.exp(-(x**2 + y**2) / (2 * sigma**2))
+
+    # Ensure rest_prob is strictly within [0, 1] after calculation
+    # (Gaussian is always non-negative, clip ensures it doesn't exceed 1 if max_rest_strength > 1 was passed somehow)
+    rest_prob = np.clip(rest_prob, 0.0, 1.0)
+
+    # Calculate the total probability available for movement
+    move_prob_total = 1.0 - rest_prob
+
+    # Distribute movement probability equally among the 4 directions (+x, -x, +y, -y)
+    # Handle potential floating point inaccuracies where move_prob_total might be slightly < 0
+    move_prob_each = max(0.0, move_prob_total / 4.0)
+
+    # Create the final probability array
+    probs = np.array([move_prob_each, move_prob_each, move_prob_each, move_prob_each, rest_prob])
+
+    # --- Optional: Check for debugging ---
+    # if not np.isclose(np.sum(probs), 1.0):
+    #     print(f"Warning: Probabilities do not sum to 1 at ({x:.3f}, {y:.3f}). Probs: {probs}, Sum: {np.sum(probs)}")
+    #     # Attempt to re-normalize as a fallback, though it shouldn't be needed with this logic
+    #     if np.sum(probs) > 1e-9: # Avoid division by zero
+    #        probs = probs / np.sum(probs)
+    #     else: # If sum is zero, default to equal probability (though rest_prob would be 1 here)
+    #        probs = np.array([0.0, 0.0, 0.0, 0.0, 1.0])
+    # -------------------------------------
+
+    return probs
+
+
+
+
+
+
+
+
+
+
+
+
 
 def main():
-    num_steps = 100
+    num_steps = 1000
     num_trials = 10  # Set the number of independent trials
     time = np.arange(num_steps + 1)
 
     # Store MSD results for each trial
     msd_no_rest_trials = []
-    msd_gaussian_rest_trials = []
+    #msd_gaussian_rest_trials = []
     # msd_high_rest_trials = []
     # msd_uniform_rest_trials = []
     # msd_exponential_rest_trials = []
-    msd_plateau_rest_trials = []
-    msd_multi_center_rest_trials = []
+    #msd_plateau_rest_trials = []
+    #msd_multi_center_rest_trials = []
+    msd_gaussian_rest_trials_new = []
 
     for _ in range(num_trials):
         # Simulate with different resting probabilities
+
         rw_no_rest = RandomWalk(disorder_function=None, num_steps=num_steps)
         rw_no_rest.trajectories(use_disorder=False)
         msd_no_rest_trials.append(rw_no_rest.compute_msd())
-
+        '''
         rw_gaussian_rest = RandomWalk(disorder_function=gaussian_rest_prob_streght, num_steps=num_steps)
         rw_gaussian_rest.trajectories(use_disorder=True)
         msd_gaussian_rest_trials.append(rw_gaussian_rest.compute_msd())
-
+        '''
+        rw_gaussian_rest_new = RandomWalk(disorder_function=corrected_gaussian_rest_prob, num_steps=num_steps)
+        rw_gaussian_rest_new.trajectories(use_disorder=True)
+        msd_gaussian_rest_trials_new.append(rw_gaussian_rest_new.compute_msd())
         '''
         rw_high_rest = RandomWalk(disorder_function=my_spatial_disorder, num_steps=num_steps)
         rw_high_rest.trajectories(use_disorder=True)
@@ -755,7 +820,7 @@ def main():
         rw_exponential_rest = RandomWalk(disorder_function=exponential_rest_prob, num_steps=num_steps)
         rw_exponential_rest.trajectories(use_disorder=True)
         msd_exponential_rest_trials.append(rw_exponential_rest.compute_msd())
-        '''
+        
 
         rw_plateu = RandomWalk(disorder_function=plateau_rest_prob, num_steps=num_steps)
         rw_plateu.trajectories(use_disorder=True)
@@ -764,25 +829,27 @@ def main():
         rw_multi_center = RandomWalk(disorder_function=multi_center_rest_prob, num_steps=num_steps)
         rw_multi_center.trajectories(use_disorder=True)
         msd_multi_center_rest_trials.append(rw_multi_center.compute_msd())
-
+        '''
         # Calculate the average MSD over all trials
     avg_msd_no_rest = np.mean(msd_no_rest_trials, axis=0)
-    avg_msd_gaussian_rest = np.mean(msd_gaussian_rest_trials, axis=0)
+    #avg_msd_gaussian_rest = np.mean(msd_gaussian_rest_trials, axis=0)
+    avg_msd_gaussian_rest_new = np.mean(msd_gaussian_rest_trials_new, axis=0)
     # avg_msd_high_rest = np.mean(msd_high_rest_trials, axis=0)
     # avg_msd_uniform_rest = np.mean(msd_uniform_rest_trials, axis=0)
     # avg_msd_exponential_rest = np.mean(msd_exponential_rest_trials, axis=0)
-    avg_msd_plateau = np.mean(msd_plateau_rest_trials, axis=0)
-    avg_msd_multi_center = np.mean(msd_multi_center_rest_trials, axis=0)
+    #avg_msd_plateau = np.mean(msd_plateau_rest_trials, axis=0)
+    #avg_msd_multi_center = np.mean(msd_multi_center_rest_trials, axis=0)
 
     # Plotting averaged MSD on a log-log scale
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.loglog(time, avg_msd_no_rest, label='No Resting (rest_prob=0)')
-    ax.loglog(time, avg_msd_gaussian_rest, label='Gaussian Resting Probability')
+   # ax.loglog(time, avg_msd_gaussian_rest, label='Gaussian Resting Probability')
+    ax.loglog(time, avg_msd_gaussian_rest_new, label='Gaussian Resting Probability Corrected')
     # ax.loglog(time, avg_msd_high_rest, label='High Resting Probability (rest_prob=0.9)')
     # ax.loglog(time, avg_msd_uniform_rest, label='Uniform Resting Probability')
     # ax.loglog(time, avg_msd_exponential_rest, label='Exponential Resting Probability')
-    ax.loglog(time, avg_msd_plateau, label='Plateau Resting Probability')
-    ax.loglog(time, avg_msd_multi_center, label='Multi Center Resting Probability')
+   # ax.loglog(time, avg_msd_plateau, label='Plateau Resting Probability')
+    #ax.loglog(time, avg_msd_multi_center, label='Multi Center Resting Probability')
     ax.set_xlabel('Time Step')
     ax.set_ylabel('MSD')
     ax.set_title(f'Mean Squared Displacement (Log-Log Scale) - Averaged over {num_trials} Trials')
@@ -793,12 +860,13 @@ def main():
     # Plotting averaged MSD/Time
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(time[1:], avg_msd_no_rest[1:] / time[1:], label='No Resting (rest_prob=0)')
-    ax.plot(time[1:], avg_msd_gaussian_rest[1:] / time[1:], label='Gaussian Resting Probability')
+    #ax.plot(time[1:], avg_msd_gaussian_rest[1:] / time[1:], label='Gaussian Resting Probability')
+    ax.plot(time[1:], avg_msd_gaussian_rest_new[1:] / time[1:], label='Gaussian Resting Probability Corrected')
     # ax.plot(time[1:], avg_msd_high_rest[1:] / time[1:], label='High Resting Probability (rest_prob=0.9)')
     # ax.plot(time[1:], avg_msd_uniform_rest[1:] / time[1:], label='Uniform Resting Probability')
     # ax.plot(time[1:], avg_msd_exponential_rest[1:] / time[1:], label='Exponential Resting Probability')
-    ax.plot(time[1:], avg_msd_plateau[1:] / time[1:], label='Plateau Resting Probability')
-    ax.plot(time[1:], avg_msd_multi_center[1:] / time[1:], label='Multi Center Resting Probability')
+    #ax.plot(time[1:], avg_msd_plateau[1:] / time[1:], label='Plateau Resting Probability')
+    #ax.plot(time[1:], avg_msd_multi_center[1:] / time[1:], label='Multi Center Resting Probability')
     ax.set_xlabel('Time Step')
     ax.set_ylabel('MSD / Time')
     ax.set_title(f'Effective Diffusion Coefficient (MSD / Time) - Averaged over {num_trials} Trials')
