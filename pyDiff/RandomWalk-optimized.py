@@ -61,83 +61,158 @@ UPDATE 20/04: Eseguiti test per capire se il resting time funziona: aggiunta la 
 
 
 TODO:
-    OTTIMIZZARE E FARE NUOVI TEST
-    USARE SLOPE TEST
-    CAPIRE CON GIT
     CAPIRE COME USARE IL PROGRAMMA PER FARE PREDIZIONI FISICHE SUL COEFFICIENTE DI DIFFUSIONE ETC...
-    NUMBA(?)
 
 '''
-
-
 @numba.njit(cache=True)
-def _run_disordered_step_numba(
-    positions, # Current positions (num_walkers, 2)
-    step_size, # float
-    precomputed_probs, # (ny, nx, 5) float32 array
+def draw_power_law_wait_time(alpha):
+    v = 1.0 - np.random.rand()
+    wait_steps = np.int64(np.ceil(v**(-1.0 / alpha)))
+    return max(np.int64(1), wait_steps)
+
+# --- Numba Kernel for STANDARD Disordered Step (Rest = 1 step) ---
+@numba.njit(cache=True)
+def _run_standard_disordered_step_numba(
+    positions,           # Current positions (num_walkers, 2)
+    step_size,           # float
+    precomputed_probs,   # (ny, nx, 5) float32 array
     x_min_grid, y_min_grid, dx, dy, nx, ny # Grid parameters
     ):
-    """
-    Numba kernel for performing one step of disordered walk for all walkers.
-    Uses precomputed probabilities and fast grid indexing.
-    """
+    """ Numba kernel for one STANDARD disordered step. """
     num_walkers = positions.shape[0]
-    # Create array for steps taken in this timestep
-    steps = np.zeros_like(positions) # Ensures same shape and dtype
+    steps = np.zeros_like(positions)
 
     for i in range(num_walkers):
-        # Get current position of walker i
         current_x = positions[i, 0]
         current_y = positions[i, 1]
-
-        # Get grid index using the Numba-compatible fast calculation
         y_idx, x_idx = _calculate_grid_index_fast_numba(
             current_x, current_y,
             x_min_grid, y_min_grid, dx, dy, nx, ny)
 
-        # Lookup probabilities
-        # Numba handles array indexing efficiently
         probabilities = precomputed_probs[y_idx, x_idx, :]
         rest_prob = probabilities[4]
 
-        # Decide whether to move or rest
-        if np.random.rand() >= rest_prob:
-            # If moving, choose direction based on move probabilities
-            direction_probs = probabilities[:4] # Slice for [+x, -x, +y, -y]
+        if np.random.rand() >= rest_prob: # Check if NOT resting
+            direction_probs = probabilities[:4]
             direction_probs_sum = np.sum(direction_probs)
-
-            if direction_probs_sum > 1e-9: # Check sum before normalizing
-                # Manual implementation of np.random.choice with p
-                # Generate one random number for choice
-                choice_rand = np.random.rand() * direction_probs_sum # Scale by sum
-
-                # Cumulative sum check
+            if direction_probs_sum > 1e-9:
+                choice_rand = np.random.rand() * direction_probs_sum
                 p_plus_x = direction_probs[0]
                 p_minus_x = direction_probs[1]
                 p_plus_y = direction_probs[2]
-                # p_minus_y = direction_probs[3] # Not needed for check
 
-                if choice_rand < p_plus_x:
-                    direction_choice = 0 # +x
-                elif choice_rand < (p_plus_x + p_minus_x):
-                    direction_choice = 1 # -x
-                elif choice_rand < (p_plus_x + p_minus_x + p_plus_y):
-                    direction_choice = 2 # +y
-                else:
-                    direction_choice = 3 # -y
+                if choice_rand < p_plus_x: direction_choice = 0
+                elif choice_rand < (p_plus_x + p_minus_x): direction_choice = 1
+                elif choice_rand < (p_plus_x + p_minus_x + p_plus_y): direction_choice = 2
+                else: direction_choice = 3
 
-                # Assign step based on choice
                 if direction_choice == 0: steps[i, 0] = step_size
                 elif direction_choice == 1: steps[i, 0] = -step_size
                 elif direction_choice == 2: steps[i, 1] = step_size
                 elif direction_choice == 3: steps[i, 1] = -step_size
-            # else: if sum is ~0, walker effectively rests (no step assigned)
+        # else: If resting, steps[i,:] remains [0, 0]
 
-    # Return the steps calculated for all walkers
     return steps
 
 
+@numba.njit(cache=True)
+def _run_ctrw_disordered_step_numba(
+    positions,           # Input: Current (x,y) for all walkers
+    wait_times,          # Input/Output: Steps remaining to wait for each walker
+    step_size,           # Input: How far a walker moves if it moves
+    precomputed_probs,   # Input: The table of probabilities for each grid site
+    x_min_grid, y_min_grid, dx, dy, nx, ny, # Input: Grid info for indexing
+    alpha                # Input: CTRW exponent for power-law waits
+    ):
+    """ Numba kernel for one CTRW step with power-law waits. """
 
+    num_walkers = positions.shape[0] # How many walkers are there?
+
+    # Initialize array to store the step [dx, dy] taken by each walker IN THIS TIMESTEP.
+    # If a walker waits or fails to move, its step remains [0, 0].
+    steps = np.zeros_like(positions)
+
+    # IMPORTANT: The 'wait_times' array passed in will be modified directly by this function.
+
+    # Loop through each walker individually
+    for i in range(num_walkers):
+
+        # --- 1. Check if the walker is currently waiting ---
+        if wait_times[i] > 0:
+            # If wait_times[i] is greater than 0, this walker was previously told
+            # to wait and still has time left on its counter.
+            wait_times[i] -= 1 # Decrement the remaining wait time by 1 step.
+            # The walker does nothing else this step; its step remains [0, 0].
+
+        # --- 2. If the walker is NOT waiting ---
+        else:
+            # wait_times[i] is 0, so the walker is free to act.
+            # It will either attempt to move or decide to start a new rest period.
+
+            # --- 2a. Find where the walker is on the grid ---
+            current_x = positions[i, 0]
+            current_y = positions[i, 1]
+            # Get the grid indices (y_idx, x_idx) corresponding to the position.
+            y_idx, x_idx = _calculate_grid_index_fast_numba(
+                current_x, current_y, x_min_grid, y_min_grid, dx, dy, nx, ny)
+
+            # --- 2b. Look up the probabilities for that grid site ---
+            # Retrieve the 5 probabilities [p+x, p-x, p+y, p-y, p_rest]
+            # from the precomputed table for this specific grid location.
+            probabilities = precomputed_probs[y_idx, x_idx, :]
+            rest_prob = probabilities[4] # Extract the resting probability
+
+            # --- 2c. Decide: Rest or Move? ---
+            # Generate a random float between 0.0 and 1.0
+            if np.random.rand() < rest_prob:
+                # --- Walker CHOOSES TO REST ---
+                # Draw a waiting time 'tau' (integer >= 1) from the power-law distribution
+                tau = draw_power_law_wait_time(alpha)
+                # Set the walker's wait counter. The total wait is 'tau' steps.
+                # Since this current step is the first step of waiting, the
+                # REMAINING wait time to set on the counter is tau - 1.
+                # Ensure it's not negative if tau happened to be 1.
+                wait_times[i] = max(np.int64(0), tau - 1)
+                # Walker doesn't move this step, steps[i,:] remains [0, 0].
+
+            else:
+                # --- Walker CHOOSES TO MOVE ---
+                # Get the probabilities for the 4 move directions
+                direction_probs = probabilities[:4]
+                direction_probs_sum = np.sum(direction_probs) # Should equal 1.0 - rest_prob
+
+                # Check if movement is actually possible (i.e., rest_prob wasn't 1.0)
+                if direction_probs_sum > 1e-9: # Use tolerance for float comparison
+                    # Choose a direction based on the relative probabilities p(+x), p(-x), p(+y), p(-y)
+                    # This implements np.random.choice(4, p=normalized_probs) efficiently for Numba:
+                    choice_rand = np.random.rand() * direction_probs_sum # Random number scaled to total move prob
+                    p_plus_x  = direction_probs[0]
+                    p_minus_x = direction_probs[1]
+                    p_plus_y  = direction_probs[2]
+
+                    # Check cumulatively which direction bin the random number falls into
+                    if choice_rand < p_plus_x:
+                        direction_choice = 0 # +x
+                    elif choice_rand < (p_plus_x + p_minus_x):
+                        direction_choice = 1 # -x
+                    elif choice_rand < (p_plus_x + p_minus_x + p_plus_y):
+                        direction_choice = 2 # +y
+                    else:
+                        direction_choice = 3 # -y
+
+                    # Assign the actual step [dx, dy] based on the chosen direction
+                    if direction_choice == 0: steps[i, 0] = step_size
+                    elif direction_choice == 1: steps[i, 0] = -step_size
+                    elif direction_choice == 2: steps[i, 1] = step_size
+                    elif direction_choice == 3: steps[i, 1] = -step_size
+
+                # If direction_probs_sum was ~0 (rest_prob was ~1), the walker cannot move.
+                # steps[i,:] remains [0, 0].
+                # In either move case (moved or couldn't move because rest_prob=1),
+                # the wait_times[i] remains 0 because the walker didn't *choose* to rest.
+
+    # After looping through all walkers, return the array of steps taken in this dt
+    return steps
 
 
 
@@ -227,7 +302,7 @@ def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, n
 class RandomWalk:
     def __init__(self, interpolation=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
                  xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
-                 yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95}):
+                 yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95},use_ctrw=False):
         self.num_walkers = num_walkers
         self.num_steps = num_steps
         self.xv = xv
@@ -270,7 +345,15 @@ class RandomWalk:
         self.time = np.arange(self.num_steps + 1)
         self.disorder_function = disorder_function if disorder_function is not None else self._default_disorder_function
         self.disorder_params = disorder_params if disorder_params is not None else {}
+        self.use_ctrw = use_ctrw  # Store flag
 
+        # --- CTRW State ---
+        self.wait_times = np.zeros(self.num_walkers, dtype=np.int64)  # Initialize always
+        self.ctrw_alpha = self.disorder_params.get('ctrw_alpha', None)
+        if self.use_ctrw and (self.ctrw_alpha is None or not (0 < self.ctrw_alpha < 1)):
+            raise ValueError("CTRW enabled but 'ctrw_alpha' is missing or invalid.")
+
+        # --- Precomputation ---
         self.precomputed_probs = None
         # Call precomputation if not using default
         if self.disorder_function != self._default_disorder_function:
@@ -280,6 +363,9 @@ class RandomWalk:
                 print("Precomputation finished.")
             else:
                 print("Precomputation failed.")
+
+
+
         self.x_min = np.min(self.xv)
         self.x_max = np.max(self.xv)
         self.y_min = np.min(self.yv)
@@ -484,42 +570,39 @@ class RandomWalk:
 
     """
 
+    # --- Modified random_walk_disordered Method ---
     def random_walk_disordered(self):
         """
-        Performs one step of disordered random walk.
-        MODIFIED: Calls the Numba kernel. Modifies self.positions in place.
+        Performs one step of disordered walk. Uses standard or CTRW kernel
+        based on self.use_ctrw flag. Modifies positions and potentially wait_times.
         """
         if not self.is_uniform_grid:
-            # Numba kernel currently assumes fast indexing works
-            # Fallback to slower Python loop if needed, or adapt Numba kernel
-             print("Warning: Disordered walk called Numba kernel, but grid is not uniform. Falling back (or error).")
-             # Implement fallback or raise error
-             # For now, let's assume uniform grid check ensures this won't happen wrongly
-             # Or call a potentially slower Python loop version here
-             raise NotImplementedError("Numba kernel requires uniform grid for fast indexing.")
+            raise NotImplementedError("Optimized kernels require uniform grid.")
+        if self.precomputed_probs is None:
+            raise ValueError("Precomputed probabilities needed but not available.")
 
-
-        if self.precomputed_probs is None and self.disorder_function != self._default_disorder_function:
-             raise ValueError("Precomputed probabilities requested but not available.")
-
-        if self.precomputed_probs is not None:
-             # Call the Numba kernel
-             calculated_steps = _run_disordered_step_numba(
-                 self.positions, # Pass current positions
-                 self.step,      # Pass step size
-                 self.precomputed_probs, # Pass precomputed table
-                 # Pass grid parameters needed by index function:
-                 self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
-             )
-             # Update positions using the steps returned by Numba kernel
-             self.positions += calculated_steps
+        if self.use_ctrw:
+            # --- Call CTRW Numba kernel ---
+            calculated_steps = _run_ctrw_disordered_step_numba(
+                self.positions, self.wait_times, self.step, self.precomputed_probs,
+                self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny,
+                self.ctrw_alpha
+            )
+            # wait_times are modified in-place by the kernel
         else:
-             # Handle default case (no disorder, use ordered walk?)
-             # This branch might be unnecessary if default uses random_walk_ordered
-             self.random_walk_ordered() # Or implement default logic if needed
+            # --- Call Standard Numba kernel ---
+            calculated_steps = _run_standard_disordered_step_numba(
+                self.positions, self.step, self.precomputed_probs,
+                self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
+            )
+
+        # Update positions using the steps returned by the chosen kernel
+        self.positions += calculated_steps
 
         # Apply PBC if needed
         # self.apply_pbc()
+
+    # --------------------------------------------
 
     def random_walk_disordered_interpolated(self):
         """
@@ -654,48 +737,31 @@ class RandomWalk:
             print("Out-of-bounds walker indices:", out_of_bounds)
             self.out_of_bounds_walkers.update(out_of_bounds)  # Update the set
 
-    def trajectories(self, use_disorder=False): # Removed interpolation flag for now
-        """
-        Runs the simulation loop.
-        MODIFIED to optionally avoid storing all positions.
-        """
-        # --- Option 1: Store all positions (Original) ---
-        # self.all_positions = [np.copy(self.initial_positions)]
-        # self.positions = np.copy(self.initial_positions) # Reset positions
-        # for _ in range(self.num_steps):
-        #     if use_disorder:
-        #          self.random_walk_disordered()
-        #     else:
-        #          self.random_walk_ordered() # Ensure this exists/is optimized
-        #     self.all_positions.append(np.copy(self.positions))
-        # self.all_positions = np.array(self.all_positions)
-        # return self.all_positions
-        # -----------------------------------------------
 
-        # --- Option 2: Compute MSD relevant info on the fly (More memory efficient) ---
-        # Need initial positions and sum of squared displacements at each step
-        self.positions = np.copy(self.initial_positions) # Reset positions
-        # Store only MSD results instead of all positions
-        self.msd_results = np.zeros(self.num_steps + 1)
+
+
+    # --- trajectories method (ensure wait_times are reset) ---
+    def trajectories(self, use_disorder=False):
+        self.positions = np.copy(self.initial_positions)
+        self.wait_times.fill(0)  # Reset wait times at the start of each trajectory
+
+        self.msd_results = np.zeros(self.num_steps + 1, dtype=np.float64)
         self.msd_results[0] = 0.0
-        # Or store sum_sq_displacement if calculating components separately
-        # sum_sq_disp = np.zeros(self.num_steps + 1)
 
+        print(
+            f"Running trajectories ({'CTRW' if self.use_ctrw and use_disorder else ('Standard Disordered' if use_disorder else 'Ordered')})...")
         for step_num in range(1, self.num_steps + 1):
             if use_disorder:
-                 self.random_walk_disordered() # This updates self.positions
+                self.random_walk_disordered()  # Will use correct kernel based on self.use_ctrw
             else:
-                 self.random_walk_ordered() # Ensure this exists/is optimized
+                self.random_walk_ordered()
 
-            # Calculate MSD at this step
             displacement = self.positions - self.initial_positions
-            sq_displacement = np.sum(displacement**2, axis=1) # Summing (x^2 + y^2) for each walker
-            self.msd_results[step_num] = np.mean(sq_displacement) # Average over walkers
+            sq_displacement = np.sum(displacement ** 2, axis=1)
+            self.msd_results[step_num] = np.mean(sq_displacement)
 
-        # Now self.msd_results contains the final MSD array
         print("Simulation finished. MSD calculated.")
-        # If you need self.all_positions later, you must use Option 1
-        # --------------------------------------------------------------------
+    # ---------------------------------------------------------
 
 
     '''
@@ -1088,130 +1154,68 @@ def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
 
 
 
+# =============================================================================
+# Multiprocessing setup (Modified run_single_trial)
+# =============================================================================
 def run_single_trial(params):
-    """
-    Runs one full simulation trial and returns the MSD array.
-
-    Args:
-        params (tuple): A tuple containing all necessary parameters:
-                        (trial_index, num_steps, num_walkers, step, dt,
-                         disorder_function, disorder_params, xv, yv, seed)
-    Returns:
-        numpy.ndarray: The calculated MSD array for this trial, or None if error.
-    """
+    """ Runs one full simulation trial and returns the MSD array. """
     try:
-        # Unpack parameters
+        # Unpack parameters (ensure order matches task_args creation)
         trial_index, num_steps, num_walkers, step, dt, \
-        disorder_function, disorder_params, xv, yv, seed = params
+        disorder_function, disorder_params, xv, yv, use_ctrw_flag, seed = params # Added use_ctrw_flag
 
-        # --- CRITICAL: Set unique random seed for each process ---
         np.random.seed(seed)
-        # ---------------------------------------------------------
+        # print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag})...")
 
-        print(f"Starting Trial {trial_index+1} (Seed: {seed})...") # Optional progress
-
-        # Instantiate RandomWalk
         rw = RandomWalk(
-            num_steps=num_steps,
-            num_walkers=num_walkers,
-            step=step,
-            dt=dt,
-            xv=xv,
-            yv=yv,
-            disorder_function=disorder_function,
-            disorder_params=disorder_params
+            num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
+            xv=xv, yv=yv, disorder_function=disorder_function,
+            disorder_params=disorder_params, use_ctrw=use_ctrw_flag # Pass flag here
         )
-
-        # Run simulation (assuming trajectories computes MSD on the fly)
         use_disorder = (disorder_function != rw._default_disorder_function)
         rw.trajectories(use_disorder=use_disorder)
+        msd_result = rw.compute_msd()
 
-        # Get MSD results
-        msd_result = rw.compute_msd() # Should return self.msd_results
-
-        print(f"Finished Trial {trial_index+1}.") # Optional progress
+        # print(f"Finished Trial {trial_index+1}.")
         return msd_result
-
     except Exception as e:
         print(f"!!! Error in Trial {trial_index+1}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None # Return None on error
+        import traceback; traceback.print_exc()
+        return None
 
-# --- Main function to manage parallel execution ---
+# --- main_parallel function (Modified task_args creation) ---
 def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
-                  disorder_function, disorder_params, xv, yv):
-    """
-    Manages running multiple trials in parallel using multiprocessing.
-    """
-    start_time = timer.time()
+                  disorder_function, disorder_params, xv, yv, use_ctrw_flag): # Added use_ctrw_flag
+    # ... (timer start, get num_workers) ...
+    start_time = timer.time(); num_workers = os.cpu_count(); print(f"Detected {num_workers} cores.")
 
-    # --- Determine number of worker processes ---
-    try:
-        # Use os.cpu_count() if available (Python 3.4+)
-        num_workers = os.cpu_count()
-        print(f"Detected {num_workers} CPU cores.")
-    except NotImplementedError:
-        # Fallback if cpu_count() is not available
-        num_workers = 4 # Or set a sensible default
-        print(f"cpu_count() not available, using {num_workers} workers.")
-    # You might want to use num_workers - 1 to leave a core free for system tasks
-    # num_workers = max(1, num_workers - 1)
-
-    # --- Prepare arguments for each trial ---
-    base_seed = np.random.randint(10000) # Generate a random base seed
+    base_seed = np.random.randint(10000)
     task_args = []
     for i in range(num_trials_total):
         unique_seed = base_seed + i
-        task_args.append(
+        task_args.append( # Ensure all needed args are included in the correct order
             (i, num_steps, num_walkers, step, dt,
-             disorder_function, disorder_params, xv, yv, unique_seed)
+             disorder_function, disorder_params, xv, yv, use_ctrw_flag, unique_seed) # Added flag
         )
 
-    print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes...")
-
-    # --- Create and run the pool ---
-    # 'spawn' context might be needed on macOS/Windows sometimes if 'fork' causes issues
-    # ctx = multiprocessing.get_context('spawn')
-    # pool = ctx.Pool(processes=num_workers)
+    print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes (CTRW Mode: {use_ctrw_flag})...")
     pool = multiprocessing.Pool(processes=num_workers)
-
     results = []
     try:
-        # pool.map executes run_single_trial for each item in task_args
-        # It blocks until all tasks are complete
         results = pool.map(run_single_trial, task_args)
-    except Exception as e:
-        print(f"!!! Error during parallel execution: {e}")
-    finally:
-        # --- Clean up the pool ---
-        pool.close() # No more tasks will be submitted
-        pool.join()  # Wait for all worker processes to finish
-
+    except Exception as e: print(f"!!! Error during parallel execution: {e}")
+    finally: pool.close(); pool.join()
     print(f"\nParallel execution finished. Time taken: {timer.time() - start_time:.2f} seconds")
 
-    # --- Process results ---
-    # Filter out any None results from failed trials
+    # ... (Process results as before: filter None, stack, mean) ...
     successful_results = [res for res in results if res is not None]
-
-    if not successful_results:
-        print("Error: No trials completed successfully!")
-        return None, None
-
-    num_successful = len(successful_results)
-    print(f"Number of successful trials: {num_successful} / {num_trials_total}")
-
-    # Average the MSD arrays
-    # Stack results into a 2D array (trials x time_steps)
+    if not successful_results: return None, None
+    print(f"Successful trials: {len(successful_results)}/{num_trials_total}")
     msd_stack = np.stack(successful_results, axis=0)
-    # Calculate the mean across the trials axis (axis=0)
     avg_msd = np.mean(msd_stack, axis=0)
-
-    time_axis = np.arange(num_steps + 1) # Create time axis
-
+    time_axis = np.arange(num_steps + 1)
     return avg_msd, time_axis
-
-
+# =============================================================================
 
 
 
@@ -1495,8 +1499,15 @@ def main():
 
 if __name__ == "__main__":
     # --- Simulation Parameters ---
-    NUM_TRIALS = 20 # Number of parallel trials
-    NUM_STEPS = 100000 # Number of steps per trial
+    ENABLE_CTRW = True  # <<< SET TO True TO ENABLE CTRW, False FOR STANDARD REST >>>
+    CTRW_ALPHA = 0.7  # <<< SET desired exponent if ENABLE_CTRW is True >>>
+
+
+
+
+    # --- Simulation Parameters ---
+    NUM_TRIALS = 1 # Number of parallel trials
+    NUM_STEPS = 1000 # Number of steps per trial
     NUM_WALKERS = 100
     STEP_SIZE = 0.001
     TIME_STEP_DT = 0.0001
@@ -1509,12 +1520,19 @@ if __name__ == "__main__":
 
     # --- Select Disorder Function and Parameters ---
     # Example: Corrected Gaussian
-    DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
-    DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
+    #DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
+    #DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
+    #if ENABLE_CTRW:
+     #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+
+
 
     # Example: No disorder
-    # DISORDER_FUNC = None
-    # DISORDER_PARAMS = {}
+    DISORDER_FUNC = None
+    DISORDER_PARAMS = {}
+    if ENABLE_CTRW:
+        DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+
 
     # --- Run the parallel simulation ---
     avg_msd, time_axis = main_parallel(
@@ -1526,39 +1544,41 @@ if __name__ == "__main__":
         disorder_function=DISORDER_FUNC,
         disorder_params=DISORDER_PARAMS,
         xv=XV,
-        yv=YV
+        yv=YV,
+        use_ctrw_flag=ENABLE_CTRW  # Pass the flag
     )
 
     # --- Plotting Results ---
     if avg_msd is not None and time_axis is not None:
         print("Plotting results...")
-        # Plot MSD/Time
+        # ... (Plotting code as before, using avg_msd and time_axis) ...
+        mode_label = f"CTRW alpha={CTRW_ALPHA}" if ENABLE_CTRW else "Standard Rest"
+        func_name = DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"
+
         fig1, ax1 = plt.subplots(figsize=(10, 6))
-        ax1.plot(time_axis[1:], avg_msd[1:] / time_axis[1:], label=f'{DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"}')
-        ax1.set_xlabel('Time Step')
-        ax1.set_ylabel('MSD / Time Step')
-        ax1.set_title(f'Avg Effective Diffusion Coefficient ({NUM_TRIALS} Trials)')
-        ax1.grid(True)
-        ax1.legend()
-        # Optionally set y-axis limits if needed, e.g., ax1.set_ylim(0, 1.2e-6)
-        plt.savefig("msd_over_time_parallel.png") # Save the plot
+        ax1.plot(time_axis[1:], avg_msd[1:] / time_axis[1:], label=f'{func_name} ({mode_label})')
+        # ... (rest of plotting 1) ...
+        ax1.legend();
+        ax1.grid(True);
+        ax1.set_xlabel("Time Step");
+        ax1.set_ylabel("MSD / Time Step")
+        ax1.set_title(f"Avg Effective Diffusion Coefficient ({NUM_TRIALS} Trials)")
+        plt.savefig(f"msd_over_time_{'ctrw' if ENABLE_CTRW else 'std'}.png")
 
-        # Plot Log-Log MSD
         fig2, ax2 = plt.subplots(figsize=(10, 6))
-        valid_indices = (time_axis > 0) & (avg_msd > 0) # For log plot
-        ax2.loglog(time_axis[valid_indices], avg_msd[valid_indices], label=f'{DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"}')
-        # Add slope=1 line for reference
-        if np.any(valid_indices):
-            first_msd = avg_msd[valid_indices][0]
-            first_time = time_axis[valid_indices][0]
-            slope_1_line = (first_msd / first_time) * time_axis[valid_indices]
-            ax2.loglog(time_axis[valid_indices], slope_1_line, 'r--', alpha=0.7, label='Slope=1 guide')
+        valid = (time_axis > 0) & (avg_msd > 0)
+        ax2.loglog(time_axis[valid], avg_msd[valid], label=f'{func_name} ({mode_label})')
+        # ... (slope 1 guide logic) ...
+        if np.any(valid):
+            first_msd = avg_msd[valid][0];
+            first_time = time_axis[valid][0]
+            slope_1_line = (first_msd / first_time) * time_axis[valid]
+            ax2.loglog(time_axis[valid], slope_1_line, 'r--', alpha=0.7, label='Slope=1 guide')
+        ax2.legend();
+        ax2.grid(True, which='both');
+        ax2.set_xlabel("Time Step");
+        ax2.set_ylabel("MSD")
+        ax2.set_title(f"Avg Mean Squared Displacement (Log-Log, {NUM_TRIALS} Trials)")
+        plt.savefig(f"msd_loglog_{'ctrw' if ENABLE_CTRW else 'std'}.png")
 
-        ax2.set_xlabel('Time Step')
-        ax2.set_ylabel('MSD')
-        ax2.set_title(f'Avg Mean Squared Displacement (Log-Log, {NUM_TRIALS} Trials)')
-        ax2.grid(True, which='both') # Grid on major and minor ticks for log scales
-        ax2.legend()
-        plt.savefig("msd_loglog_parallel.png") # Save the plot
-
-        plt.show() # Display plots
+        plt.show()
