@@ -48,6 +48,7 @@ TODO:
 '''
 
 
+
 class RandomWalk:
     def __init__(self, interpolation=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
                  xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
@@ -781,7 +782,7 @@ def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
 
 
 def main():
-    num_steps = 50000
+    num_steps = 100000
     num_trials = 1  # Set the number of independent trials
     time = np.arange(num_steps + 1)
 
