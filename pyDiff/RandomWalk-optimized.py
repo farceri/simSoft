@@ -1,5 +1,5 @@
 import numpy as np
-import scipy as sp
+from scipy import stats
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numba
@@ -581,6 +581,16 @@ class RandomWalk:
         if self.precomputed_probs is None:
             raise ValueError("Precomputed probabilities needed but not available.")
 
+        """
+        # --- Add Debug Prints ---
+        print(f"DEBUG: Inside random_walk_disordered")
+        print(f"DEBUG: self.precomputed_probs is None? {self.precomputed_probs is None}")
+        print(f"DEBUG: self.disorder_function: {repr(self.disorder_function)}")
+        print(f"DEBUG: self._default_disorder_function: {repr(self._default_disorder_function)}")
+        print(
+            f"DEBUG: self.disorder_function != self._default_disorder_function? {self.disorder_function != self._default_disorder_function}")
+        # -----------------------
+        """
         if self.use_ctrw:
             # --- Call CTRW Numba kernel ---
             calculated_steps = _run_ctrw_disordered_step_numba(
@@ -1506,8 +1516,8 @@ if __name__ == "__main__":
 
 
     # --- Simulation Parameters ---
-    NUM_TRIALS = 1 # Number of parallel trials
-    NUM_STEPS = 1000 # Number of steps per trial
+    NUM_TRIALS = 20 # Number of parallel trials
+    NUM_STEPS = 10000 # Number of steps per trial
     NUM_WALKERS = 100
     STEP_SIZE = 0.001
     TIME_STEP_DT = 0.0001
@@ -1520,18 +1530,18 @@ if __name__ == "__main__":
 
     # --- Select Disorder Function and Parameters ---
     # Example: Corrected Gaussian
-    #DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
-    #DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
-    #if ENABLE_CTRW:
-     #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+    DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
+    DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
+    if ENABLE_CTRW:
+        DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
 
 
 
     # Example: No disorder
-    DISORDER_FUNC = None
-    DISORDER_PARAMS = {}
-    if ENABLE_CTRW:
-        DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+    #DISORDER_FUNC = None
+    #DISORDER_PARAMS = {}
+    #if ENABLE_CTRW:
+     #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
 
 
     # --- Run the parallel simulation ---
@@ -1548,37 +1558,107 @@ if __name__ == "__main__":
         use_ctrw_flag=ENABLE_CTRW  # Pass the flag
     )
 
-    # --- Plotting Results ---
+    # --- Quantitative Analysis & Plotting Results ---
     if avg_msd is not None and time_axis is not None:
+        print("\n" + "=" * 30)
+        print(" Quantitative Analysis Results")
+        print("=" * 30)
+
+        # === Method 1: Fit Log-Log MSD ===
+        print("\n--- Analysis Method 1: Log-Log MSD Fit ---")
+        N_min_fit = NUM_STEPS // 2  # Example: Fit last half
+        N_max_fit = NUM_STEPS
+        N_min_fit = max(100, N_min_fit)  # Ensure minimum range, avoid early transients
+
+        if N_max_fit <= N_min_fit:
+            print("Not enough time steps for fitting range.")
+        else:
+            time_fit_range = time_axis[N_min_fit: N_max_fit + 1]
+            msd_fit_range = avg_msd[N_min_fit: N_max_fit + 1]
+            valid_indices = (time_fit_range > 0) & (msd_fit_range > 0)
+            if np.sum(valid_indices) < 2:
+                print("Not enough valid data points for log-log fit.")
+            else:
+                time_log = np.log(time_fit_range[valid_indices])
+                msd_log = np.log(msd_fit_range[valid_indices])
+                slope, intercept, r_value, p_value, std_err = stats.linregress(time_log, msd_log)
+                alpha_estimate = slope
+                print(f"Fit Range N = [{N_min_fit}, {N_max_fit}]")
+                print(f"  Estimated alpha (slope) = {alpha_estimate:.4f}")
+                print(f"  Standard Error          = {std_err:.4f}")
+                print(f"  R-squared               = {r_value ** 2:.4f}")
+
+        # === Method 2: Fit Log-Log MSD/N ===
+        print("\n--- Analysis Method 2: Log-Log MSD/N Fit ---")
+        time_eff = time_axis[1:]
+        msd_over_n = avg_msd[1:] / time_eff
+
+        # Use same fit range N_min_fit, N_max_fit
+        if N_max_fit <= N_min_fit:
+            print("Not enough time steps for fitting range.")
+        else:
+            idx_min = N_min_fit - 1;
+            idx_max = N_max_fit - 1
+            time_fit_range_eff = time_eff[idx_min: idx_max + 1]
+            msd_over_n_fit_range = msd_over_n[idx_min: idx_max + 1]
+            valid_indices_eff = (time_fit_range_eff > 0) & (msd_over_n_fit_range > 0)
+            if np.sum(valid_indices_eff) < 2:
+                print("Not enough valid data points for log-log MSD/N fit.")
+            else:
+                time_log_eff = np.log(time_fit_range_eff[valid_indices_eff])
+                msd_over_n_log = np.log(msd_over_n_fit_range[valid_indices_eff])
+                slope_b, intercept_c, r_value_b, p_value_b, std_err_b = stats.linregress(time_log_eff, msd_over_n_log)
+                alpha_minus_1_estimate = slope_b
+                alpha_estimate_from_b = slope_b + 1.0
+                print(f"Fit Range N = [{N_min_fit}, {N_max_fit}]")
+                print(f"  Estimated alpha-1 (slope) = {alpha_minus_1_estimate:.4f}")
+                print(f"  Implied alpha             = {alpha_estimate_from_b:.4f}")
+                print(f"  Standard Error (of slope) = {std_err_b:.4f}")
+                print(f"  R-squared                 = {r_value_b ** 2:.4f}")
+        print("=" * 30 + "\n")
+
+        # --- Your existing plotting code ---
         print("Plotting results...")
-        # ... (Plotting code as before, using avg_msd and time_axis) ...
         mode_label = f"CTRW alpha={CTRW_ALPHA}" if ENABLE_CTRW else "Standard Rest"
         func_name = DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"
 
+        # Plot MSD/Time
         fig1, ax1 = plt.subplots(figsize=(10, 6))
         ax1.plot(time_axis[1:], avg_msd[1:] / time_axis[1:], label=f'{func_name} ({mode_label})')
-        # ... (rest of plotting 1) ...
-        ax1.legend();
+        ax1.set_xlabel('Time Step')
+        ax1.set_ylabel('MSD / Time Step')
+        ax1.set_title(f'Avg Effective Diffusion Coefficient ({NUM_TRIALS} Trials)')
         ax1.grid(True);
-        ax1.set_xlabel("Time Step");
-        ax1.set_ylabel("MSD / Time Step")
-        ax1.set_title(f"Avg Effective Diffusion Coefficient ({NUM_TRIALS} Trials)")
+        ax1.legend()
         plt.savefig(f"msd_over_time_{'ctrw' if ENABLE_CTRW else 'std'}.png")
 
+        # Plot Log-Log MSD
         fig2, ax2 = plt.subplots(figsize=(10, 6))
         valid = (time_axis > 0) & (avg_msd > 0)
         ax2.loglog(time_axis[valid], avg_msd[valid], label=f'{func_name} ({mode_label})')
-        # ... (slope 1 guide logic) ...
+        # Add slope=1 line for reference
         if np.any(valid):
             first_msd = avg_msd[valid][0];
             first_time = time_axis[valid][0]
+            # Use calculated alpha if available and reliable, otherwise default to 1 for guide
+            guide_alpha = alpha_estimate if 'alpha_estimate' in locals() and not np.isnan(alpha_estimate) else 1.0
+            # Generate fit line using results from Method 1
+            if 'alpha_estimate' in locals() and not np.isnan(alpha_estimate):
+                fit_line = np.exp(intercept) * (time_axis[valid] ** alpha_estimate)
+                ax2.loglog(time_axis[valid], fit_line, 'r--', alpha=0.7, label=f'Fit (alpha={alpha_estimate:.3f})')
+            else:  # Fallback slope=1 guide if fit failed
+                slope_1_line = (first_msd / first_time) * time_axis[valid]
+                ax2.loglog(time_axis[valid], slope_1_line, 'r--', alpha=0.7, label='Slope=1 guide')
+
             slope_1_line = (first_msd / first_time) * time_axis[valid]
-            ax2.loglog(time_axis[valid], slope_1_line, 'r--', alpha=0.7, label='Slope=1 guide')
-        ax2.legend();
+            ax2.loglog(time_axis[valid], slope_1_line, 'g--', alpha=0.7, label='Slope=1 standard diffusion')
+        ax2.set_xlabel('Time Step');
+        ax2.set_ylabel('MSD')
+        ax2.set_title(f'Avg Mean Squared Displacement (Log-Log, {NUM_TRIALS} Trials)')
         ax2.grid(True, which='both');
-        ax2.set_xlabel("Time Step");
-        ax2.set_ylabel("MSD")
-        ax2.set_title(f"Avg Mean Squared Displacement (Log-Log, {NUM_TRIALS} Trials)")
+        ax2.legend()
         plt.savefig(f"msd_loglog_{'ctrw' if ENABLE_CTRW else 'std'}.png")
 
         plt.show()
+    else:
+        print("Simulation failed, skipping analysis and plotting.")
