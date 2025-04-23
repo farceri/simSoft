@@ -59,6 +59,8 @@ UPDATE 19/04: Eseguiti test per capire se il resting time funziona.
 UPDATE 20/04: Eseguiti test per capire se il resting time funziona: aggiunta la possibilità di mediare su più run
             distinte e con resting time diversi: gaussiano, esponenziale, uniforme, plateau, multi center
 
+UPDATE 23/04: Il resting time funziona: inserito il waiting time (se il walker decide di fermarsi estrae un numero di timestep
+                durante i quali rimane fermo da una powerlaw tau^-(1+alpha). Inseriti test quantitativi per verificare la subdiffusione)
 
 TODO:
     CAPIRE COME USARE IL PROGRAMMA PER FARE PREDIZIONI FISICHE SUL COEFFICIENTE DI DIFFUSIONE ETC...
@@ -1175,7 +1177,7 @@ def run_single_trial(params):
         disorder_function, disorder_params, xv, yv, use_ctrw_flag, seed = params # Added use_ctrw_flag
 
         np.random.seed(seed)
-        # print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag})...")
+        print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag})...")
 
         rw = RandomWalk(
             num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
@@ -1517,7 +1519,7 @@ if __name__ == "__main__":
 
     # --- Simulation Parameters ---
     NUM_TRIALS = 20 # Number of parallel trials
-    NUM_STEPS = 10000 # Number of steps per trial
+    NUM_STEPS = 100000 # Number of steps per trial
     NUM_WALKERS = 100
     STEP_SIZE = 0.001
     TIME_STEP_DT = 0.0001
