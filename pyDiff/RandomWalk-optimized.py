@@ -72,6 +72,25 @@ def draw_power_law_wait_time(alpha):
     wait_steps = np.int64(np.ceil(v**(-1.0 / alpha)))
     return max(np.int64(1), wait_steps)
 
+@numba.njit(cache=True, fastmath=True) # Consider Numba for this too
+def random_walk_ordered_numba(positions, step_size, num_walkers):
+    steps = np.zeros_like(positions)
+    # Generate random integers 0, 1, 2, 3 for all walkers at once
+    direction_choices = np.random.randint(0, 4, num_walkers)
+
+    # Create masks for each direction
+    mask_px = (direction_choices == 0)
+    mask_mx = (direction_choices == 1)
+    mask_py = (direction_choices == 2)
+    mask_my = (direction_choices == 3)
+
+    # Apply steps based on masks
+    steps[mask_px, 0] = step_size
+    steps[mask_mx, 0] = -step_size
+    steps[mask_py, 1] = step_size
+    steps[mask_my, 1] = -step_size
+
+    return steps # Return only the steps
 # --- Numba Kernel for STANDARD Disordered Step (Rest = 1 step) ---
 @numba.njit(cache=True)
 def _run_standard_disordered_step_numba(
@@ -219,6 +238,311 @@ def _run_ctrw_disordered_step_numba(
 
 
 
+IDX_P_X, IDX_M_X, IDX_P_Y, IDX_M_Y, IDX_REST = 0, 1, 2, 3, 4
+NUM_DIRECTIONS = 4 # Number of movement directions
+
+def my_spatial_disorder_vectorized(x, y, rest_fixed=0.9, **kwargs):
+    """
+    Vectorized version of my_spatial_disorder (using the active part).
+    Applies a fixed uniform resting probability across the grid.
+
+    Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        rest_fixed (float): The fixed resting probability to apply everywhere.
+        **kwargs: Catches unused parameters passed during precomputation.
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    # Ensure rest_fixed is valid
+    rest_prob_val = np.clip(rest_fixed, 0.0, 1.0)
+
+    # Create an array of the same shape as x (or y) filled with the rest probability
+    rest_prob = np.full(x.shape, rest_prob_val, dtype=np.float32)
+
+    # Calculate movement probability (element-wise)
+    move_prob_total = 1.0 - rest_prob
+    # Use np.maximum for vectorized max(0.0, ...)
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
+
+def gaussian_rest_prob_vectorized(x, y, sigma=0.1, max_rest_strength=1.0, **kwargs):
+    """
+    Vectorized Gaussian resting probability centered at the origin.
+    Ensures the returned probabilities always sum to 1.0.
+
+    Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        sigma (float): Standard deviation of the Gaussian distribution.
+        max_rest_strength (float): The maximum resting probability at the origin (must be <= 1).
+        **kwargs: Catches unused parameters passed during precomputation.
+
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    # Ensure max_rest_strength is valid
+    max_rest_strength = min(max_rest_strength, 1.0) # Cannot be more than 1
+
+    # Calculate the resting probability based on Gaussian decay (element-wise)
+    raw_rest_prob = max_rest_strength * np.exp(-(x**2 + y**2) / (2 * sigma**2))
+
+    # Ensure rest_prob is strictly within [0, 1]
+    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
+
+    # Calculate movement probability (element-wise)
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
+
+
+def uniform_rest_prob_vectorized(x, y, rest_level=0.9, **kwargs):
+    """
+    Vectorized uniform resting probability across the grid.
+    Ensures the returned probabilities always sum to 1.0.
+
+    Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        rest_level (float): The uniform resting probability level (clipped to [0, 1]).
+        **kwargs: Catches unused parameters passed during precomputation.
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    # Ensure rest_level is valid
+    rest_prob_val = np.clip(rest_level, 0.0, 1.0)
+
+    # Create an array filled with the rest probability
+    rest_prob = np.full(x.shape, rest_prob_val, dtype=np.float32)
+
+    # Calculate movement probability
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
+
+def plateau_rest_prob_vectorized(x, y, plateau_radius=0.001, max_rest=0.5, decay_rate=5.0, **kwargs):
+    """
+    Vectorized version: Resting probability has a plateau near the origin.
+    Ensures the returned probabilities always sum to 1.0.
+
+     Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        plateau_radius (float): Radius of the central plateau.
+        max_rest (float): Resting probability within the plateau.
+        decay_rate (float): Exponential decay rate outside the plateau.
+        **kwargs: Catches unused parameters passed during precomputation.
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    distance_from_origin = np.sqrt(x**2 + y**2)
+
+    # Calculate raw rest probability using np.where for conditional logic on arrays
+    raw_rest_prob = np.where(
+        distance_from_origin <= plateau_radius,
+        max_rest, # Value if condition is true
+        max_rest * np.exp(-decay_rate * (distance_from_origin - plateau_radius)) # Value if false
+    )
+
+    # Ensure rest_prob is in [0, 1]
+    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
+
+    # Calculate movement probability (element-wise)
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
+
+def multi_center_rest_prob_vectorized(x, y, center1=(0.001, 0.001), center2=(-0.001, -0.001),
+                                      strength1=0.5, strength2=0.5, decay_rate=5.0, max_total_rest=0.9, **kwargs):
+    """
+    Vectorized version: High resting probability around multiple centers.
+    Ensures the returned probabilities always sum to 1.0.
+
+    Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        center1 (tuple): Coordinates (x, y) of the first center.
+        center2 (tuple): Coordinates (x, y) of the second center.
+        strength1 (float): Max strength of the first center's rest probability.
+        strength2 (float): Max strength of the second center's rest probability.
+        decay_rate (float): Gaussian decay rate for both centers.
+        max_total_rest (float): Maximum allowed combined resting probability.
+       **kwargs: Catches unused parameters passed during precomputation.
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    # Calculate distance squared to each center
+    dist_sq1 = (x - center1[0])**2 + (y - center1[1])**2
+    dist_sq2 = (x - center2[0])**2 + (y - center2[1])**2
+
+    # Calculate rest probability contribution from each center
+    center1_rest = strength1 * np.exp(-decay_rate * dist_sq1)
+    center2_rest = strength2 * np.exp(-decay_rate * dist_sq2)
+
+    # Combine contributions and clip to the overall maximum allowed rest probability
+    raw_rest_prob = np.clip(center1_rest + center2_rest, 0.0, max_total_rest)
+
+    # Ensure rest_prob is in [0, 1] (redundant if max_total_rest <= 1, but safe)
+    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
+
+    # Calculate movement probability (element-wise)
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
+
+
+def exponential_rest_prob_vectorized(x, y, decay_rate=0.1, max_rest=0.95, **kwargs):
+    """
+    Vectorized version: Resting probability decreases exponentially from the origin.
+    Ensures the returned probabilities always sum to 1.0 using EQUAL move probabilities.
+
+    Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        decay_rate (float): Exponential decay rate based on distance.
+        max_rest (float): Maximum resting probability at the origin.
+        **kwargs: Catches unused parameters passed during precomputation.
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    distance_from_origin = np.sqrt(x**2 + y**2)
+
+    # Calculate the raw resting probability
+    raw_rest_prob = max_rest * np.exp(-decay_rate * distance_from_origin)
+
+    # Ensure rest_prob is in [0, 1]
+    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
+
+    # Calculate movement probability (element-wise) - distributes remaining probability equally
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
+
+def boundary_dependent_rest_prob_vectorized(x, y, x_bounds=(-1.0, 1.0), y_bounds=(-1.0, 1.0),
+                                            boundary_strength=0.5, decay_rate=5.0, max_total_rest=0.9, **kwargs):
+    """
+    Vectorized version: Resting probability increases near the boundaries.
+    Ensures the returned probabilities always sum to 1.0.
+
+    Args:
+        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
+        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
+        x_bounds (tuple): (min_x, max_x) defining the boundary region.
+        y_bounds (tuple): (min_y, max_y) defining the boundary region.
+        boundary_strength (float): Strength scaling factor for boundary effect.
+        decay_rate (float): Exponential decay rate from the boundary.
+        max_total_rest (float): Maximum allowed combined resting probability.
+        **kwargs: Catches unused parameters passed during precomputation.
+
+    Returns:
+        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
+    """
+    # Calculate distance from boundaries
+    dist_to_min_x = np.abs(x - x_bounds[0])
+    dist_to_max_x = np.abs(x - x_bounds[1])
+    dist_to_min_y = np.abs(y - y_bounds[0])
+    dist_to_max_y = np.abs(y - y_bounds[1])
+
+    # Calculate rest probability contribution from each boundary edge
+    rest_prob_min_x = boundary_strength * np.exp(-decay_rate * dist_to_min_x)
+    rest_prob_max_x = boundary_strength * np.exp(-decay_rate * dist_to_max_x)
+    rest_prob_min_y = boundary_strength * np.exp(-decay_rate * dist_to_min_y)
+    rest_prob_max_y = boundary_strength * np.exp(-decay_rate * dist_to_max_y)
+
+    # Combine contributions (summing effect from all boundaries)
+    # Clip to the overall maximum allowed rest probability
+    raw_rest_prob = np.clip(rest_prob_min_x + rest_prob_max_x + rest_prob_min_y + rest_prob_max_y, 0.0, max_total_rest)
+
+    # Ensure rest_prob is in [0, 1]
+    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
+
+    # Calculate movement probability (element-wise)
+    move_prob_total = 1.0 - rest_prob
+    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
+
+    # Create the output array (ny, nx, 5)
+    out_shape = x.shape + (5,)
+    probs = np.zeros(out_shape, dtype=np.float32)
+
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
+
+    return probs
 
 
 
@@ -249,11 +573,11 @@ def corrected_gaussian_rest_prob_vectorized(x, y, sigma=1.0, max_rest_strength=0
     out_shape = x.shape + (5,)
     probs = np.zeros(out_shape, dtype=np.float32)
 
-    probs[..., 0] = move_prob_each
-    probs[..., 1] = move_prob_each
-    probs[..., 2] = move_prob_each
-    probs[..., 3] = move_prob_each
-    probs[..., 4] = rest_prob
+    probs[..., IDX_P_X] = move_prob_each
+    probs[..., IDX_M_X] = move_prob_each
+    probs[..., IDX_P_Y] = move_prob_each
+    probs[..., IDX_M_Y] = move_prob_each
+    probs[..., IDX_REST] = rest_prob
 
     return probs
 
@@ -302,7 +626,7 @@ def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, n
 
 
 class RandomWalk:
-    def __init__(self, interpolation=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
+    def __init__(self, interpolation=False,store_history=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
                  xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
                  yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95},use_ctrw=False):
         self.num_walkers = num_walkers
@@ -337,6 +661,12 @@ class RandomWalk:
             pass  # Fallback to robust indexing below
         else:
             print("Grid has zero dimensions? Using robust indexing.")
+
+        self.store_history = store_history
+        self.all_positions = []  # Initialize as list
+        if self.store_history:
+            self.all_positions.append(np.copy(self.initial_positions))
+
         self.box_size = np.array([xv.shape[0], yv.shape[0]])
         self.dt = dt
         self.positions = np.zeros((self.num_walkers, 2))
@@ -499,78 +829,7 @@ class RandomWalk:
             self.dx, self.dy,
             self.nx, self.ny
         )
-    """
-    #DEBUGGING
-    def random_walk_disordered(self):
-        print("--- random_walk_disordered ---")
-        steps = np.zeros((self.num_walkers, 2))
-        print(f"  Initialized steps: {steps.shape}, first value: {steps[0, 0]}")
-        #moved = False
 
-        for i in range(self.num_walkers):
-            print(f"  Using disorder_function: {self.disorder_function.__name__}")
-            #print(f"  --- Walker {i} ---")
-            current_pos = self.positions[i]
-            #print(f"    current_pos: {current_pos}")
-            y_idx, x_idx = self._get_grid_index(current_pos[0], current_pos[1])
-            #print(f"    y_idx: {y_idx}, x_idx: {x_idx}")
-            grid_value_x = self.xv[y_idx, x_idx]
-            grid_value_y = self.yv[y_idx, x_idx]
-            # print(f"    grid_value_x: {grid_value_x}, grid_value_y: {grid_value_y}")
-            probabilities = self.disorder_function(grid_value_x, grid_value_y)
-            print(f"    probabilities: {probabilities}")
-
-            # Ensure probabilities are valid (basic check)
-            if len(probabilities) != 5 or not np.isclose(np.sum(probabilities), 1.0) or np.any(probabilities < 0):
-                probabilities = self._default_disorder_function(grid_value_x, grid_value_y)
-                #print(f"Warning: Invalid probabilities at ({grid_value_x:.3f}, {grid_value_y:.3f}), using default.")
-
-            rest_prob = probabilities[4]
-            print(f"    rest_prob: {rest_prob}")# Get resting probability from function
-
-
-
-            rand_val=np.random.rand()
-            #print(f"    rand_val: {rand_val}")
-            if rand_val >= rest_prob:
-                print("    Walker is moving")
-                #moved = True
-                direction_probs = probabilities[:4]
-                direction_probs_sum = np.sum(direction_probs)
-
-                if direction_probs_sum > 0:  # Avoid division by zero
-                    direction_probs_normalized = direction_probs / direction_probs_sum
-                else:
-                    direction_probs_normalized = np.array([0.25, 0.25, 0.25, 0.25])  # Default uniform
-
-                direction_choice = np.random.choice(4, p=direction_probs_normalized)
-                # direction_choice = np.random.choice(4, p=probabilities[:4])
-                #print(f"    direction_choice: {direction_choice}")
-
-                if direction_choice == 0:  # +x
-                    steps[i, 0] = self.step
-                    #print(f"      Moving +x: {self.step}")
-                elif direction_choice == 1:  # -x
-                    steps[i, 0] = -self.step
-                    # print(f"      Moving -x: {self.step}")
-                elif direction_choice == 2:  # +y
-                    steps[i, 1] = self.step
-                    # print(f"      Moving +y: {self.step}")
-                elif direction_choice == 3:  # -y
-                    steps[i, 1] = -self.step
-                    # print(f"      Moving -y: {self.step}")
-
-                self.positions[i] += steps[i]
-
-            #else: print("    Walker is resting")
-
-            print(f"    self.positions[{i}]: {self.positions[i]}")
-
-        print(f"  Final self.positions: {self.positions}")
-        return self.positions
-
-
-    """
 
     # --- Modified random_walk_disordered Method ---
     def random_walk_disordered(self):
@@ -696,42 +955,13 @@ class RandomWalk:
         """Default: Uniform probability distribution (no spatial disorder)."""
         return np.array([0.25, 0.25, 0.25, 0.25, 0])  # [+x, -x, +y, -y, rest]
 
-
-
-
+    # In RandomWalk class:
     def random_walk_ordered(self):
-        """
-        Calculates the positions of the walkers at a single time step
-
-        """
-        steps = np.zeros((self.num_walkers, 2))
-        directions = np.random.randint(0, 4, self.num_walkers)  # 0: +x, 1: -x, 2: +y, 3: -y
-
-        for i in range(self.num_walkers):
-            if directions[i] == 0:
-                steps[i, 0] = self.step
-            elif directions[i] == 1:
-                steps[i, 0] = -self.step
-            elif directions[i] == 2:
-                steps[i, 1] = self.step
-            elif directions[i] == 3:
-                steps[i, 1] = -self.step
-
+        """Calculates one step for the ordered random walk using Numba."""
+        steps = random_walk_ordered_numba(self.positions, self.step, self.num_walkers)
         self.positions += steps
 
-        '''  
-        ALSO A DIAGONAL MOVEMENT
-        bx[b[:, 0] > 0.5] = self.step  # Move +step if random number > 0.5
-        bx[b[:, 0] <= 0.5] = -self.step  # Move -step if random number <= 0.5
-        by[b[:, 1] > 0.5] = self.step
-        by[b[:, 1] <= 0.5] = -self.step
 
-
-        self.positions[:, 0] += bx.flatten()  # Update x-coordinates for all walkers
-        self.positions[:, 1] += by.flatten()  # Update y-coordinates for all walkers
-        '''
-
-        return self.positions
 
     def _check_out_of_bounds(self, positions):
         """
@@ -750,8 +980,6 @@ class RandomWalk:
             self.out_of_bounds_walkers.update(out_of_bounds)  # Update the set
 
 
-
-
     # --- trajectories method (ensure wait_times are reset) ---
     def trajectories(self, use_disorder=False):
         self.positions = np.copy(self.initial_positions)
@@ -759,6 +987,10 @@ class RandomWalk:
 
         self.msd_results = np.zeros(self.num_steps + 1, dtype=np.float64)
         self.msd_results[0] = 0.0
+
+        if self.store_history and not self.all_positions:  # Ensure initial stored if list was cleared
+            self.all_positions = [np.copy(self.initial_positions)]
+
 
         print(
             f"Running trajectories ({'CTRW' if self.use_ctrw and use_disorder else ('Standard Disordered' if use_disorder else 'Ordered')})...")
@@ -768,28 +1000,21 @@ class RandomWalk:
             else:
                 self.random_walk_ordered()
 
+            if self.store_history:
+                self.all_positions.append(np.copy(self.positions))
+
             displacement = self.positions - self.initial_positions
             sq_displacement = np.sum(displacement ** 2, axis=1)
             self.msd_results[step_num] = np.mean(sq_displacement)
 
+
+        if self.store_history:
+            self.all_positions = np.array(self.all_positions)
         print("Simulation finished. MSD calculated.")
     # ---------------------------------------------------------
 
 
-    '''
-    def ordered_trajectories(self):
-        """
-        Calculates the positions of all the random walkers following the ordered random walk.
 
-        """
-        for _ in range(self.num_steps):
-            self.random_walk_ordered()
-            self.all_positions.append(np.copy(self.positions))
-
-        self.all_positions = np.array(self.all_positions)
-
-        return self.all_positions
-    '''
 
     def animate_trajectory(self, walker_index=0, interval=100, save_animation=False, filename="random_walk.gif"):
         """
@@ -799,6 +1024,9 @@ class RandomWalk:
             walker_index (int): The index of the walker to animate (default: 0).
             interval (int): The delay between frames in milliseconds (default: 100).
         """
+
+
+
         if not hasattr(self, 'all_positions'):
             print("Error: Run the simulation first using run_simulation()")
             return
@@ -879,7 +1107,7 @@ class RandomWalk:
         valid_indices = (time > 0) & (msd > 0)
         time_valid = time[valid_indices]
         msd_valid = msd[valid_indices]
-        Dp = self.step ** 2 / (2 * self.dt)  # QUELLO GIUSTO?
+        Dp = self.step ** 2 / (4 * self.dt)  # QUELLO GIUSTO?
         D = 0.25 * msd_valid / time_valid
 
         if np.sum(valid_indices) < 2:
@@ -1012,160 +1240,6 @@ class RandomWalk:
         plt.show()
 
 
-def my_spatial_disorder(x, y):
-    """LAPLACE
-    if(x<0):
-        prob_plus_x=0.05*np.exp(0.1*x)
-        prob_minus_x =0.05*np.exp(0.1*x)
-    else:
-        prob_plus_x=0.05*np.exp(-0.1*x)
-        prob_minus_x=0.05*np.exp(-0.1*x)
-
-    if (y < 0):
-        prob_plus_y = 0.25 * np.exp(0.5 * y)
-        prob_minus_y = 0.25 * np.exp(0.5 * y)
-    else:
-        prob_plus_y= 0.25 * np.exp(-0.5 * y)
-        prob_minus_y = 0.25* np.exp(-0.5 * y)
-    """
-    '''
-    #GAUSSIANA
-    prob_plus_x=1/np.sqrt(np.pi*(2*0.1))*np.exp(-x**2/(2*0.1))
-    prob_minus_x = 1 / np.sqrt(np.pi * (2*0.1)) * np.exp(-x ** 2 / (2*0.1))
-    prob_plus_y = 1 / np.sqrt(np.pi * (2*0.1)) * np.exp(-y ** 2 / (2*0.1))
-    prob_minus_y = 1 / np.sqrt(np.pi * (2*0.1)) * np.exp(-y ** 2 / (2*0.1))
-    rest_prob =1 / np.sqrt(np.pi * (4 * 0.5)) * np.exp(-(y ** 2+x**2) / (4 * 0.5))
-
-    rest_prob =(1/(2*np.pi*0.1*0.5)*np.exp(-(x**2)/(2*0.1**2)-y**2/(2*0.5**2)))*0.2 #0.2 serve per normalizzarle tutte
-    prob_plus_x=1/np.sqrt(np.pi*(2*0.1))*np.exp(-x**2/(2*0.1**2))*0.2
-    prob_minus_x = 1 / np.sqrt(np.pi * (2*0.1)) * np.exp(-x ** 2 / (2*0.1**2))*0.2
-    prob_plus_y = 1 / np.sqrt(np.pi * (2*0.5)) * np.exp(-y ** 2 / (2*0.5**2))*0.2
-    prob_minus_y = 1 / np.sqrt(np.pi * (2*0.5)) * np.exp(-y ** 2 / (2*0.5**2))*0.2
-    '''
-    #
-    '''
-
-    '''
-    rest_prob = 0.9
-    prob_plus_x = 0.25 * (1 - rest_prob)
-    prob_minus_x = 0.25 * (1 - rest_prob)
-    prob_plus_y = 0.25 * (1 - rest_prob)
-    prob_minus_y = 0.25 * (1 - rest_prob)
-
-    # probs = np.clip([prob_plus_x, prob_minus_x, prob_plus_y, prob_minus_y,rest_prob], 0, 1)
-    probs = [prob_plus_x, prob_minus_x, prob_plus_y, prob_minus_y, rest_prob]
-
-    if np.sum(probs) > 0:
-        probs = probs / np.sum(probs)
-    else:
-        probs = [0.25, 0.25, 0.25, 0.25, 0]
-
-    return probs
-
-
-def gaussian_rest_prob(x, y, sigma=0.1):
-    """Gaussian resting probability centered at the origin."""
-    return np.array([0.2, 0.2, 0.2, 0.2, np.exp(-(x ** 2 + y ** 2) / (2 * sigma ** 2))])
-
-
-def gaussian_rest_prob_streght(x, y, sigma=0.1, rest_strength=0.95):
-    """Gaussian resting probability centered at the origin."""
-    rest_prob = rest_strength * np.exp(-(x ** 2 + y ** 2) / (2 * sigma ** 2))
-    return np.clip([0.2, 0.2, 0.2, 0.2, rest_prob], 0, 1)
-
-
-def uniform_rest_prob(x, y, rest_level=0.9):
-    """Uniform resting probability across the grid."""
-    return np.array([0.25 * (1 - rest_level), 0.25 * (1 - rest_level),
-                     0.25 * (1 - rest_level), 0.25 * (1 - rest_level),
-                     rest_level])
-
-
-def plateau_rest_prob(x, y, plateau_radius=0.001, max_rest=0.5, decay_rate=5.0):
-    """Resting probability has a plateau near the origin."""
-    distance_from_origin = np.sqrt(x ** 2 + y ** 2)
-    if distance_from_origin <= plateau_radius:
-        rest_prob = max_rest
-    else:
-        rest_prob = max_rest * np.exp(-decay_rate * (distance_from_origin - plateau_radius))
-    base_prob = (1 - rest_prob) / 4
-    return np.clip([base_prob, base_prob, base_prob, base_prob, rest_prob], 0, 1)
-
-
-def multi_center_rest_prob(x, y):
-    """High resting probability around multiple centers."""
-    center1_rest = 0.5 * np.exp(-5 * ((x - 0.001) ** 2 + (y - 0.001) ** 2))
-    center2_rest = 0.5 * np.exp(-5 * ((x + 0.001) ** 2 + (y + 0.001) ** 2))
-    rest_prob = np.clip(center1_rest + center2_rest, 0, 0.9)
-    base_prob = (1 - rest_prob) / 4
-    return np.clip([base_prob, base_prob, base_prob, base_prob, rest_prob], 0, 1)
-
-
-def exponential_rest_prob(x, y, decay_rate=0.1, max_rest=0.95):
-    """Resting probability decreases exponentially from the origin."""
-    rest_prob = max_rest * np.exp(-decay_rate * np.sqrt(x ** 2 + y ** 2))
-    return np.clip([0.2 * (1 - max_rest), 0.2 * (1 - max_rest),
-                    0.3 * (1 - max_rest), 0.3 * (1 - max_rest),
-                    rest_prob], 0, 1)
-
-
-def boundary_dependent_rest_prob(x, y, boundary_strength=0.5):
-    """Resting probability increases near the boundaries. QUESTO NON HA TANTO SENSO"""
-    rest_prob_x = boundary_strength * (np.exp(-5 * (1 - np.abs(x))) + np.exp(-5 * (1 + x)))
-    rest_prob_y = boundary_strength * (np.exp(-5 * (1 - np.abs(y))) + np.exp(-5 * (1 + y)))
-    rest_prob = np.clip(rest_prob_x + rest_prob_y, 0, 0.9)  # Combine and clip
-    base_prob = (1 - rest_prob) / 4
-    return np.array([base_prob, base_prob, base_prob, base_prob, rest_prob])
-
-def corrected_gaussian_rest_prob(x, y, sigma=1, max_rest_strength=0.95):
-    """
-    Corrected Gaussian resting probability centered at the origin.
-    Ensures the returned probabilities always sum to 1.0.
-
-    Args:
-        x (float): x-coordinate.
-        y (float): y-coordinate.
-        sigma (float): Standard deviation of the Gaussian distribution.
-        max_rest_strength (float): The maximum resting probability at the origin (must be <= 1).
-
-    Returns:
-        numpy.ndarray: Array of 5 probabilities [p(+x), p(-x), p(+y), p(-y), p(rest)]
-                       that sums to 1.0.
-    """
-    # Ensure max_rest_strength is valid
-    max_rest_strength = min(max_rest_strength, 1.0) # Cannot be more than 1
-
-    # Calculate the resting probability based on Gaussian decay
-    rest_prob = max_rest_strength * np.exp(-(x**2 + y**2) / (2 * sigma**2))
-
-    # Ensure rest_prob is strictly within [0, 1] after calculation
-    # (Gaussian is always non-negative, clip ensures it doesn't exceed 1 if max_rest_strength > 1 was passed somehow)
-    rest_prob = np.clip(rest_prob, 0.0, 1.0)
-
-    # Calculate the total probability available for movement
-    move_prob_total = 1.0 - rest_prob
-
-    # Distribute movement probability equally among the 4 directions (+x, -x, +y, -y)
-    # Handle potential floating point inaccuracies where move_prob_total might be slightly < 0
-    move_prob_each = max(0.0, move_prob_total / 4.0)
-
-    # Create the final probability array
-    probs = np.array([move_prob_each, move_prob_each, move_prob_each, move_prob_each, rest_prob])
-
-    # --- Optional: Check for debugging ---
-    # if not np.isclose(np.sum(probs), 1.0):
-    #     print(f"Warning: Probabilities do not sum to 1 at ({x:.3f}, {y:.3f}). Probs: {probs}, Sum: {np.sum(probs)}")
-    #     # Attempt to re-normalize as a fallback, though it shouldn't be needed with this logic
-    #     if np.sum(probs) > 1e-9: # Avoid division by zero
-    #        probs = probs / np.sum(probs)
-    #     else: # If sum is zero, default to equal probability (though rest_prob would be 1 here)
-    #        probs = np.array([0.0, 0.0, 0.0, 0.0, 1.0])
-    # -------------------------------------
-
-    return probs
-
-
-
 # =============================================================================
 # Multiprocessing setup (Modified run_single_trial)
 # =============================================================================
@@ -1173,20 +1247,30 @@ def run_single_trial(params):
     """ Runs one full simulation trial and returns the MSD array. """
     try:
         # Unpack parameters (ensure order matches task_args creation)
+        # Renamed disorder_function to disorder_function_param for clarity
         trial_index, num_steps, num_walkers, step, dt, \
-        disorder_function, disorder_params, xv, yv, use_ctrw_flag, seed = params # Added use_ctrw_flag
+        disorder_function_param, disorder_params, xv, yv, use_ctrw_flag, seed = params
 
         np.random.seed(seed)
         print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag})...")
 
+        # Instantiate RandomWalk, passing the original disorder function parameter
         rw = RandomWalk(
             num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
-            xv=xv, yv=yv, disorder_function=disorder_function,
-            disorder_params=disorder_params, use_ctrw=use_ctrw_flag # Pass flag here
+            xv=xv, yv=yv, disorder_function=disorder_function_param, # Pass the param here
+            disorder_params=disorder_params, use_ctrw=use_ctrw_flag
         )
-        use_disorder = (disorder_function != rw._default_disorder_function)
-        rw.trajectories(use_disorder=use_disorder)
-        msd_result = rw.compute_msd()
+
+        # *** CORRECTED LOGIC ***
+        # Determine if the disordered walk should be used based on whether
+        # a specific disorder function was provided in the parameters.
+        should_use_disorder = (disorder_function_param is not None)
+
+        # Pass the correctly determined flag to the trajectories method
+        rw.trajectories(use_disorder=should_use_disorder)
+
+        # Compute (or retrieve) MSD results
+        msd_result = rw.compute_msd() # Assumes compute_msd retrieves pre-calculated results
 
         # print(f"Finished Trial {trial_index+1}.")
         return msd_result
@@ -1194,6 +1278,7 @@ def run_single_trial(params):
         print(f"!!! Error in Trial {trial_index+1}: {e}")
         import traceback; traceback.print_exc()
         return None
+
 
 # --- main_parallel function (Modified task_args creation) ---
 def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
@@ -1511,7 +1596,7 @@ def main():
 
 if __name__ == "__main__":
     # --- Simulation Parameters ---
-    ENABLE_CTRW = True  # <<< SET TO True TO ENABLE CTRW, False FOR STANDARD REST >>>
+    ENABLE_CTRW = False  # <<< SET TO True TO ENABLE CTRW, False FOR STANDARD REST >>>
     CTRW_ALPHA = 0.7  # <<< SET desired exponent if ENABLE_CTRW is True >>>
 
 
@@ -1519,7 +1604,7 @@ if __name__ == "__main__":
 
     # --- Simulation Parameters ---
     NUM_TRIALS = 20 # Number of parallel trials
-    NUM_STEPS = 100000 # Number of steps per trial
+    NUM_STEPS = 1000 # Number of steps per trial
     NUM_WALKERS = 100
     STEP_SIZE = 0.001
     TIME_STEP_DT = 0.0001
@@ -1532,16 +1617,16 @@ if __name__ == "__main__":
 
     # --- Select Disorder Function and Parameters ---
     # Example: Corrected Gaussian
-    DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
-    DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
-    if ENABLE_CTRW:
-        DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+    #DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
+    #DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
+    #if ENABLE_CTRW:
+     #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
 
 
 
     # Example: No disorder
-    #DISORDER_FUNC = None
-    #DISORDER_PARAMS = {}
+    DISORDER_FUNC = None
+    DISORDER_PARAMS = {}
     #if ENABLE_CTRW:
      #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
 
