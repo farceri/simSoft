@@ -631,9 +631,18 @@ class RandomWalk:
                  yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95},use_ctrw=False):
         self.num_walkers = num_walkers
         self.num_steps = num_steps
+        # --- Grid Setup ---
+        if xv is None or yv is None:
+            # Default grid if none provided
+            print("Warning: No grid provided, using default 100x100 grid.")
+            xv, yv = np.meshgrid(np.linspace(-1, 1, 100), np.linspace(-1, 1, 100))
         self.xv = xv
         self.yv = yv
         self.ny, self.nx = self.xv.shape
+        self.x_min = np.min(self.xv)
+        self.x_max = np.max(self.xv)
+        self.y_min = np.min(self.yv)
+        self.y_max = np.max(self.yv)
         # --- Setup for _get_grid_index_fast ---
         # Check if grid is uniform and calculate parameters if possible
         self.is_uniform_grid = False  # Flag
@@ -662,10 +671,7 @@ class RandomWalk:
         else:
             print("Grid has zero dimensions? Using robust indexing.")
 
-        self.store_history = store_history
-        self.all_positions = []  # Initialize as list
-        if self.store_history:
-            self.all_positions.append(np.copy(self.initial_positions))
+
 
         self.box_size = np.array([xv.shape[0], yv.shape[0]])
         self.dt = dt
@@ -696,12 +702,12 @@ class RandomWalk:
             else:
                 print("Precomputation failed.")
 
+        self.store_history = store_history
+        self.all_positions = []  # Initialize as list
+        if self.store_history:
+            self.all_positions.append(np.copy(self.initial_positions))
 
 
-        self.x_min = np.min(self.xv)
-        self.x_max = np.max(self.xv)
-        self.y_min = np.min(self.yv)
-        self.y_max = np.max(self.yv)
         self.out_of_bounds_walkers = set()
 
     def _precompute_probabilities(self):
@@ -1013,58 +1019,120 @@ class RandomWalk:
         print("Simulation finished. MSD calculated.")
     # ---------------------------------------------------------
 
-
-
-
     def animate_trajectory(self, walker_index=0, interval=100, save_animation=False, filename="random_walk.gif"):
         """
         Animates the trajectory of a single random walker.
+        Handles cases where the walker might not have moved.
 
         Args:
             walker_index (int): The index of the walker to animate (default: 0).
             interval (int): The delay between frames in milliseconds (default: 100).
+            save_animation (bool): Whether to save the animation to a file.
+            filename (str): Filename for the saved animation.
         """
-
-
-
-        if not hasattr(self, 'all_positions'):
-            print("Error: Run the simulation first using run_simulation()")
+        # --- Check if history was stored ---
+        if not self.store_history or not hasattr(self, 'all_positions') or len(self.all_positions) == 0:
+            print("Error: Cannot animate. Run simulation with store_history=True first.")
             return
+        # Ensure all_positions is a numpy array
+        if not isinstance(self.all_positions, np.ndarray):
+            try:
+                # Attempt conversion if it's still a list (should happen at end of trajectories)
+                self.all_positions = np.array(self.all_positions)
+                print("Converted all_positions list to NumPy array for animation.")
+            except Exception as e:
+                print(f"Error: Could not convert all_positions to NumPy array: {e}")
+                return
 
         if walker_index >= self.num_walkers:
             print(f"Error: Walker index {walker_index} is out of bounds (0 to {self.num_walkers - 1}).")
             return
+        if self.all_positions.shape[0] <= 1:
+            print("Error: Not enough time steps in history to animate.")
+            return
 
         fig, ax = plt.subplots()
-        ax.set_xlim(np.min(self.all_positions[:, walker_index, 0]), np.max(self.all_positions[:, walker_index, 0]))
-        ax.set_ylim(np.min(self.all_positions[:, walker_index, 1]), np.max(self.all_positions[:, walker_index, 1]))
+
+        # --- Calculate plot limits robustly ---
+        x_positions = self.all_positions[:, walker_index, 0]
+        y_positions = self.all_positions[:, walker_index, 1]
+
+        x_min, x_max = np.min(x_positions), np.max(x_positions)
+        y_min, y_max = np.min(y_positions), np.max(y_positions)
+
+        # Add padding or handle zero range
+        x_padding = (x_max - x_min) * 0.1  # 10% padding
+        y_padding = (y_max - y_min) * 0.1  # 10% padding
+
+        # If min == max (walker didn't move in that dimension), add default padding
+        if np.isclose(x_min, x_max):
+            x_padding = 0.1  # Default padding if no movement
+            x_min -= x_padding
+            x_max += x_padding
+        else:
+            x_min -= x_padding
+            x_max += x_padding
+
+        if np.isclose(y_min, y_max):
+            y_padding = 0.1  # Default padding if no movement
+            y_min -= y_padding
+            y_max += y_padding
+        else:
+            y_min -= y_padding
+            y_max += y_padding
+
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        # ------------------------------------
+
         ax.set_xlabel("X Position")
         ax.set_ylabel("Y Position")
         ax.set_title(f"Trajectory of Walker {walker_index}")
-        ax.grid(visible=True, which='major', color='black', linestyle='-')
-        ax.grid(visible=True, which='minor', color='black', linestyle='--')
-        plt.minorticks_on()
-        line, = ax.plot([], [], lw=2)
-        point, = ax.plot([], [], 'ro', markersize=8)  # Current position
+        ax.grid(True, which='major', color='grey', linestyle='--')
+        # ax.grid(visible=True, which='minor', color='lightgrey', linestyle=':') # Optional minor grid
+        # plt.minorticks_on() # Optional minor ticks
+        ax.set_aspect('equal', adjustable='box')  # Keep aspect ratio equal
 
+        line, = ax.plot([], [], 'b-', lw=1.5, alpha=0.8)  # Trajectory line
+        point, = ax.plot([], [], 'ro', markersize=6)  # Current position marker
+        start_point, = ax.plot(x_positions[0], y_positions[0], 'go', markersize=6, label='Start')  # Start marker
+
+        # Ensure update function handles the case of only one frame (though checked above)
         def update(frame):
-            xdata = self.all_positions[:frame, walker_index, 0]
-            ydata = self.all_positions[:frame, walker_index, 1]
-            line.set_data(xdata, ydata)
-            point.set_data(xdata[-1:], ydata[-1:])  # Update current position marker
-            return line, point
+            if frame == 0:  # Handle first frame explicitly if needed
+                line.set_data([], [])
+                point.set_data(x_positions[0], y_positions[0])
+            else:
+                # Plot up to the current frame + 1 (to include the frame itself)
+                line.set_data(x_positions[:frame + 1], y_positions[:frame + 1])
+                point.set_data(x_positions[frame], y_positions[frame])  # Current point
+            return line, point, start_point  # Return all artists being updated
 
-        ani = animation.FuncAnimation(fig, update, frames=len(self.all_positions), interval=interval, blit=True)
+        # Create animation
+        # frames should be the number of steps recorded (length of all_positions)
+        num_frames = self.all_positions.shape[0]
+        ani = animation.FuncAnimation(fig, update, frames=num_frames,
+                                      interval=interval, blit=True, repeat=False)
 
         if save_animation:
+            print(f"Attempting to save animation as {filename}...")
             try:
-                ani.save(filename, writer='ffmpeg')
-            except:
-                print("FFmpeg not found. Saving as GIF instead.")
-                ani.save("random_walk.gif", writer='pillow')
+                # Try saving using ffmpeg first (usually better quality)
+                ani.save(filename, writer='ffmpeg', fps=1000 / interval, dpi=150)
+                print("Animation saved successfully (using ffmpeg).")
+            except Exception as e1:
+                print(f"  ffmpeg writer failed: {e1}")
+                print("  Attempting to save as GIF using pillow...")
+                try:
+                    # Fallback to pillow for GIF
+                    ani.save(filename, writer='pillow', fps=1000 / interval)
+                    print("Animation saved successfully (as GIF using pillow).")
+                except Exception as e2:
+                    print(f"  Pillow writer also failed: {e2}")
+                    print("  Could not save animation. Ensure ffmpeg or pillow is installed.")
+                    plt.show()  # Show interactively if saving fails
         else:
-            plt.show()
-
+            plt.show()  # Show interactively if not saving
     def compute_msd(self, direction='all'):
         """
         Compute the mean squared displacement over time.
@@ -1595,8 +1663,9 @@ def main():
 """
 
 if __name__ == "__main__":
+
     # --- Simulation Parameters ---
-    ENABLE_CTRW = False  # <<< SET TO True TO ENABLE CTRW, False FOR STANDARD REST >>>
+    ENABLE_CTRW = True  # <<< SET TO True TO ENABLE CTRW, False FOR STANDARD REST >>>
     CTRW_ALPHA = 0.7  # <<< SET desired exponent if ENABLE_CTRW is True >>>
 
 
@@ -1604,7 +1673,7 @@ if __name__ == "__main__":
 
     # --- Simulation Parameters ---
     NUM_TRIALS = 20 # Number of parallel trials
-    NUM_STEPS = 1000 # Number of steps per trial
+    NUM_STEPS = 10000 # Number of steps per trial
     NUM_WALKERS = 100
     STEP_SIZE = 0.001
     TIME_STEP_DT = 0.0001
@@ -1617,16 +1686,16 @@ if __name__ == "__main__":
 
     # --- Select Disorder Function and Parameters ---
     # Example: Corrected Gaussian
-    #DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
-    #DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
-    #if ENABLE_CTRW:
-     #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+    DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
+    DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
+    if ENABLE_CTRW:
+        DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
 
 
 
     # Example: No disorder
-    DISORDER_FUNC = None
-    DISORDER_PARAMS = {}
+    #DISORDER_FUNC = None
+    #DISORDER_PARAMS = {}
     #if ENABLE_CTRW:
      #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
 
@@ -1749,3 +1818,56 @@ if __name__ == "__main__":
         plt.show()
     else:
         print("Simulation failed, skipping analysis and plotting.")
+    """
+
+    print("\nRunning a single trial for animation...")
+
+
+    # Use the same simulation parameters
+    ENABLE_CTRW_ANIM = True  # Or True, depending on what you want to animate
+    CTRW_ALPHA_ANIM = 0.7
+    NUM_STEPS_ANIM = 1000  # Can be shorter for faster animation generation
+    NUM_WALKERS_ANIM = 100
+    STEP_SIZE_ANIM = 0.001
+    TIME_STEP_DT_ANIM = 0.0001
+    grid_size_anim = 200  # Smaller grid might be okay for visualization
+    XV_anim, YV_anim = np.meshgrid(np.linspace(-1, 1, grid_size_anim), np.linspace(-1, 1, grid_size_anim))
+
+    # Select disorder function for animation run
+    #DISORDER_FUNC_ANIM = None  # Example: Ordered walk
+    #DISORDER_PARAMS_ANIM = {}
+    # OR
+    DISORDER_FUNC_ANIM = corrected_gaussian_rest_prob_vectorized
+    DISORDER_PARAMS_ANIM = {'sigma': 1.0, 'max_rest_strength': 0.95}
+    if ENABLE_CTRW_ANIM:
+        DISORDER_PARAMS_ANIM['ctrw_alpha'] = CTRW_ALPHA_ANIM
+
+    # **** Crucial Step: Instantiate with store_history=True ****
+    rw_anim = RandomWalk(
+        num_steps=NUM_STEPS_ANIM,
+        num_walkers=NUM_WALKERS_ANIM,
+        step=STEP_SIZE_ANIM,
+        dt=TIME_STEP_DT_ANIM,
+        xv=XV_anim,
+        yv=YV_anim,
+        disorder_function=DISORDER_FUNC_ANIM,
+        disorder_params=DISORDER_PARAMS_ANIM,
+        use_ctrw=ENABLE_CTRW_ANIM,
+        store_history=True  # <--- SET THIS TO TRUE
+    )
+
+    # Determine if disorder is used for this specific run
+    use_disorder_anim = (DISORDER_FUNC_ANIM is not None)
+
+    # Run the trajectories method for this single instance
+    rw_anim.trajectories(use_disorder=use_disorder_anim)
+
+    # --- Now you can animate ---
+    print("Generating animation...")
+    # Improve the check in animate_trajectory itself:
+    if hasattr(rw_anim, 'all_positions') and rw_anim.all_positions is not None and len(rw_anim.all_positions) > 0:
+        rw_anim.animate_trajectory(walker_index=0, interval=50, save_animation=False, filename="walk_animation.gif")
+        print("Animation finished")
+    else:
+        print("Could not generate animation: Position history was not stored.")
+    """
