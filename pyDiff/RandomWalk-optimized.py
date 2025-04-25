@@ -6,33 +6,32 @@ import numba
 import multiprocessing # Import the module
 import time as timer # To time the execution
 import os # To potentially get CPU count
-
+import argparse # Import argparse
 '''
-
-USARE QUESTO FILE PER PROVARE LE OTTIMIZZAZIONI:
-Profile first if unsure about bottlenecks.
-
-Implement multiprocessing for running trials in parallel (best for overall time to get averaged results).
-
-Consider pre-computing probabilities if the disorder function is complex and called very often.
-
-Apply Numba (@njit) to random_walk_ordered and potentially _get_grid_index_fast (if using direct calculation).
- 
-Try Numba on random_walk_disordered if you can refactor/precompute probabilities.
-
-Optimize grid indexing (_get_grid_index_fast) if the grid is uniform.
-
-
-
-Vectorize random_walk_ordered (compare performance with Numba version).
 
 
 Created on April 8, 2025 by Luca Sfriso
 THIS CODE SIMULATES A DISCRETE RANDOM WALK BOTH ORDER AND DISORDERED FOR A GIVEN NUMBER OF PARTICLES AND A GIVEN NUMBER OF STEPS. 
 THE QUENCHED DISORDER IS SIMULATED BY CHANGING THE PROBABILITIES OF MOVING ALONG TEH COORDINATE DIRECTIONS AND RESTING IN THE SAME PLACE.
 
+USAGE EXAMPLES:
 
-DA CAPIRE: COME USARE sys, CALCOLO DEL COEFFICIENTE DI DIFFUSIONE
+python RandomWalk-optimized.py --steps 5000 --trials 20
+SIMULATES 5000 STEPS FOR 20 TRIALS WITHOUT DISORDER
+
+python RandomWalk-optimized.py --steps 5000 --trials 20 --disorder gaussian --sigma 0.5 --max_rest 0.9
+SIMULATES 5000 STEPS FOR 20 TRIALS WITH GAUSSIAN RESTING TIME DISORDER WITH SIGMA 0.5 AND MAX REST 0.9
+
+python RandomWalk-optimized.py --steps 10000 --trials 10 --disorder uniform --rest_level 0.5 --ctrw --alpha 0.6
+SIMULATES 10000 STEPS FOR 10 TRIALS WITH UNIFORM RESTING TIME DISORDER WITH REST LEVEL 0.5 AND USING THE CONTINUOS TIME RANDOM WALK WITH EXPONENT 0.6
+
+python RandomWalk-optimized.py --steps 2000 --trials 5 --disorder plateau --plateau_radius 0.1 --max_rest 0.8 --decay_rate 10 --animate --anim_steps 1000 --anim_file plateau_walk.gif
+
+Run simulation and show histograms for steps 1000, 5000, and 10000
+python RandomWalk-optimized.py --steps 10000 --trials 10 --histograms --hist_steps 1000 5000 10000
+
+Run Gaussian disorder and show histograms
+python RandomWalk-optimized.py --steps 5000 --disorder gaussian --sigma 0.2 --max_rest 0.9 --histograms --hist_steps 500 4000
 
 UPDATE 8/04: aggiunti random_walk_ordered, ordered_trajectories, compute_msd, animate_trajectories
 
@@ -234,354 +233,6 @@ def _run_ctrw_disordered_step_numba(
 
     # After looping through all walkers, return the array of steps taken in this dt
     return steps
-
-
-
-
-IDX_P_X, IDX_M_X, IDX_P_Y, IDX_M_Y, IDX_REST = 0, 1, 2, 3, 4
-NUM_DIRECTIONS = 4 # Number of movement directions
-
-def my_spatial_disorder_vectorized(x, y, rest_fixed=0.9, **kwargs):
-    """
-    Vectorized version of my_spatial_disorder (using the active part).
-    Applies a fixed uniform resting probability across the grid.
-
-    Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        rest_fixed (float): The fixed resting probability to apply everywhere.
-        **kwargs: Catches unused parameters passed during precomputation.
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    # Ensure rest_fixed is valid
-    rest_prob_val = np.clip(rest_fixed, 0.0, 1.0)
-
-    # Create an array of the same shape as x (or y) filled with the rest probability
-    rest_prob = np.full(x.shape, rest_prob_val, dtype=np.float32)
-
-    # Calculate movement probability (element-wise)
-    move_prob_total = 1.0 - rest_prob
-    # Use np.maximum for vectorized max(0.0, ...)
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-def gaussian_rest_prob_vectorized(x, y, sigma=0.1, max_rest_strength=1.0, **kwargs):
-    """
-    Vectorized Gaussian resting probability centered at the origin.
-    Ensures the returned probabilities always sum to 1.0.
-
-    Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        sigma (float): Standard deviation of the Gaussian distribution.
-        max_rest_strength (float): The maximum resting probability at the origin (must be <= 1).
-        **kwargs: Catches unused parameters passed during precomputation.
-
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    # Ensure max_rest_strength is valid
-    max_rest_strength = min(max_rest_strength, 1.0) # Cannot be more than 1
-
-    # Calculate the resting probability based on Gaussian decay (element-wise)
-    raw_rest_prob = max_rest_strength * np.exp(-(x**2 + y**2) / (2 * sigma**2))
-
-    # Ensure rest_prob is strictly within [0, 1]
-    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
-
-    # Calculate movement probability (element-wise)
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-
-def uniform_rest_prob_vectorized(x, y, rest_level=0.9, **kwargs):
-    """
-    Vectorized uniform resting probability across the grid.
-    Ensures the returned probabilities always sum to 1.0.
-
-    Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        rest_level (float): The uniform resting probability level (clipped to [0, 1]).
-        **kwargs: Catches unused parameters passed during precomputation.
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    # Ensure rest_level is valid
-    rest_prob_val = np.clip(rest_level, 0.0, 1.0)
-
-    # Create an array filled with the rest probability
-    rest_prob = np.full(x.shape, rest_prob_val, dtype=np.float32)
-
-    # Calculate movement probability
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-def plateau_rest_prob_vectorized(x, y, plateau_radius=0.001, max_rest=0.5, decay_rate=5.0, **kwargs):
-    """
-    Vectorized version: Resting probability has a plateau near the origin.
-    Ensures the returned probabilities always sum to 1.0.
-
-     Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        plateau_radius (float): Radius of the central plateau.
-        max_rest (float): Resting probability within the plateau.
-        decay_rate (float): Exponential decay rate outside the plateau.
-        **kwargs: Catches unused parameters passed during precomputation.
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    distance_from_origin = np.sqrt(x**2 + y**2)
-
-    # Calculate raw rest probability using np.where for conditional logic on arrays
-    raw_rest_prob = np.where(
-        distance_from_origin <= plateau_radius,
-        max_rest, # Value if condition is true
-        max_rest * np.exp(-decay_rate * (distance_from_origin - plateau_radius)) # Value if false
-    )
-
-    # Ensure rest_prob is in [0, 1]
-    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
-
-    # Calculate movement probability (element-wise)
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-def multi_center_rest_prob_vectorized(x, y, center1=(0.001, 0.001), center2=(-0.001, -0.001),
-                                      strength1=0.5, strength2=0.5, decay_rate=5.0, max_total_rest=0.9, **kwargs):
-    """
-    Vectorized version: High resting probability around multiple centers.
-    Ensures the returned probabilities always sum to 1.0.
-
-    Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        center1 (tuple): Coordinates (x, y) of the first center.
-        center2 (tuple): Coordinates (x, y) of the second center.
-        strength1 (float): Max strength of the first center's rest probability.
-        strength2 (float): Max strength of the second center's rest probability.
-        decay_rate (float): Gaussian decay rate for both centers.
-        max_total_rest (float): Maximum allowed combined resting probability.
-       **kwargs: Catches unused parameters passed during precomputation.
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    # Calculate distance squared to each center
-    dist_sq1 = (x - center1[0])**2 + (y - center1[1])**2
-    dist_sq2 = (x - center2[0])**2 + (y - center2[1])**2
-
-    # Calculate rest probability contribution from each center
-    center1_rest = strength1 * np.exp(-decay_rate * dist_sq1)
-    center2_rest = strength2 * np.exp(-decay_rate * dist_sq2)
-
-    # Combine contributions and clip to the overall maximum allowed rest probability
-    raw_rest_prob = np.clip(center1_rest + center2_rest, 0.0, max_total_rest)
-
-    # Ensure rest_prob is in [0, 1] (redundant if max_total_rest <= 1, but safe)
-    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
-
-    # Calculate movement probability (element-wise)
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-
-def exponential_rest_prob_vectorized(x, y, decay_rate=0.1, max_rest=0.95, **kwargs):
-    """
-    Vectorized version: Resting probability decreases exponentially from the origin.
-    Ensures the returned probabilities always sum to 1.0 using EQUAL move probabilities.
-
-    Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        decay_rate (float): Exponential decay rate based on distance.
-        max_rest (float): Maximum resting probability at the origin.
-        **kwargs: Catches unused parameters passed during precomputation.
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    distance_from_origin = np.sqrt(x**2 + y**2)
-
-    # Calculate the raw resting probability
-    raw_rest_prob = max_rest * np.exp(-decay_rate * distance_from_origin)
-
-    # Ensure rest_prob is in [0, 1]
-    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
-
-    # Calculate movement probability (element-wise) - distributes remaining probability equally
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-def boundary_dependent_rest_prob_vectorized(x, y, x_bounds=(-1.0, 1.0), y_bounds=(-1.0, 1.0),
-                                            boundary_strength=0.5, decay_rate=5.0, max_total_rest=0.9, **kwargs):
-    """
-    Vectorized version: Resting probability increases near the boundaries.
-    Ensures the returned probabilities always sum to 1.0.
-
-    Args:
-        x (np.ndarray): Meshgrid of x-coordinates (shape ny, nx).
-        y (np.ndarray): Meshgrid of y-coordinates (shape ny, nx).
-        x_bounds (tuple): (min_x, max_x) defining the boundary region.
-        y_bounds (tuple): (min_y, max_y) defining the boundary region.
-        boundary_strength (float): Strength scaling factor for boundary effect.
-        decay_rate (float): Exponential decay rate from the boundary.
-        max_total_rest (float): Maximum allowed combined resting probability.
-        **kwargs: Catches unused parameters passed during precomputation.
-
-    Returns:
-        np.ndarray: Array of probabilities (shape ny, nx, 5) with dtype float32.
-    """
-    # Calculate distance from boundaries
-    dist_to_min_x = np.abs(x - x_bounds[0])
-    dist_to_max_x = np.abs(x - x_bounds[1])
-    dist_to_min_y = np.abs(y - y_bounds[0])
-    dist_to_max_y = np.abs(y - y_bounds[1])
-
-    # Calculate rest probability contribution from each boundary edge
-    rest_prob_min_x = boundary_strength * np.exp(-decay_rate * dist_to_min_x)
-    rest_prob_max_x = boundary_strength * np.exp(-decay_rate * dist_to_max_x)
-    rest_prob_min_y = boundary_strength * np.exp(-decay_rate * dist_to_min_y)
-    rest_prob_max_y = boundary_strength * np.exp(-decay_rate * dist_to_max_y)
-
-    # Combine contributions (summing effect from all boundaries)
-    # Clip to the overall maximum allowed rest probability
-    raw_rest_prob = np.clip(rest_prob_min_x + rest_prob_max_x + rest_prob_min_y + rest_prob_max_y, 0.0, max_total_rest)
-
-    # Ensure rest_prob is in [0, 1]
-    rest_prob = np.clip(raw_rest_prob, 0.0, 1.0).astype(np.float32)
-
-    # Calculate movement probability (element-wise)
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / NUM_DIRECTIONS)
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-
-
-
-
-
-
-
-
-def corrected_gaussian_rest_prob_vectorized(x, y, sigma=1.0, max_rest_strength=0.95, **kwargs):
-    """
-    Vectorized version: Calculates probabilities for all input x, y points.
-    x, y are expected to be NumPy arrays (like meshgrids xv, yv).
-    Returns an array of shape (*x.shape, 5).
-    CORRECTED: Uses np.minimum instead of Python min.
-    """
-    # Use np.minimum for compatibility with potential array operations
-    max_rest_strength = np.minimum(max_rest_strength, 1.0)
-
-    # These operations work element-wise on arrays x, y
-    rest_prob = max_rest_strength * np.exp(-(x**2 + y**2) / (2 * sigma**2))
-    rest_prob = np.clip(rest_prob, 0.0, 1.0)
-
-    move_prob_total = 1.0 - rest_prob
-    move_prob_each = np.maximum(0.0, move_prob_total / 4.0) # np.maximum is correct
-
-    # Create the output array (ny, nx, 5)
-    out_shape = x.shape + (5,)
-    probs = np.zeros(out_shape, dtype=np.float32)
-
-    probs[..., IDX_P_X] = move_prob_each
-    probs[..., IDX_M_X] = move_prob_each
-    probs[..., IDX_P_Y] = move_prob_each
-    probs[..., IDX_M_Y] = move_prob_each
-    probs[..., IDX_REST] = rest_prob
-
-    return probs
-
-
 
 
 @numba.njit(cache=True)
@@ -1133,6 +784,8 @@ class RandomWalk:
                     plt.show()  # Show interactively if saving fails
         else:
             plt.show()  # Show interactively if not saving
+
+
     def compute_msd(self, direction='all'):
         """
         Compute the mean squared displacement over time.
@@ -1202,46 +855,111 @@ class RandomWalk:
         '''
         return Dp, D, slope, intercept
 
-    def plot_position_histograms(self, time_step, walker_indices=None):
+    def plot_position_histograms(self, time_step, walker_indices=None, num_bins=20):  # Added num_bins
         """
-        Plots histograms of walker positions at a given time step.
+        Plots histograms of walker positions at a given time step and overlays
+        a Gaussian fit based on the data's mean and standard deviation.
 
         Args:
             time_step (int): The time step for which to plot the histograms.
-            walker_indices (list, optional): A list of walker indices to include in the histograms.
-                                           If None, all walkers are included (default: None).
+            walker_indices (list, optional): A list of walker indices to include.
+                                           If None, all walkers are included.
+            num_bins (int): Number of bins to use for the histograms.
         """
-
-        if not hasattr(self, 'all_positions'):
-            raise ValueError("Run the simulation first using ordered_trajectories()")
+        # --- Input Validation ---
+        if not self.store_history or not hasattr(self, 'all_positions') or len(self.all_positions) == 0:
+            # Updated error message for clarity
+            print("Error: Cannot plot histograms. Run simulation with store_history=True first.")
+            # Consider raising ValueError instead of just printing
+            # raise ValueError("Run the simulation with store_history=True first.")
+            return
+        if not isinstance(self.all_positions, np.ndarray):
+            try:
+                self.all_positions = np.array(self.all_positions)
+            except Exception as e:
+                print(f"Error: Could not convert all_positions to NumPy array: {e}")
+                return
 
         if time_step < 0 or time_step >= self.all_positions.shape[0]:
-            raise ValueError(f"Invalid time step: {time_step}. Must be between 0 and {self.all_positions.shape[0] - 1}")
+            print(
+                f"Warning: Invalid time step {time_step} for histograms. Max step is {self.all_positions.shape[0] - 1}. Skipping.")
+            # Or raise ValueError
+            # raise ValueError(f"Invalid time step: {time_step}. Must be between 0 and {self.all_positions.shape[0] - 1}")
+            return
 
+        # --- Get Position Data ---
         positions_at_time = self.all_positions[time_step]  # (num_walkers, 2) array
-
         if walker_indices is None:
             x_positions = positions_at_time[:, 0]
             y_positions = positions_at_time[:, 1]
+            num_data_points = self.num_walkers
         else:
-            x_positions = positions_at_time[walker_indices, 0]
-            y_positions = positions_at_time[walker_indices, 1]
+            # Ensure indices are valid
+            valid_indices = [idx for idx in walker_indices if 0 <= idx < self.num_walkers]
+            if not valid_indices:
+                print(f"Warning: No valid walker indices provided for histogram at step {time_step}. Skipping.")
+                return
+            x_positions = positions_at_time[valid_indices, 0]
+            y_positions = positions_at_time[valid_indices, 1]
+            num_data_points = len(valid_indices)
 
-        fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+        if num_data_points == 0:
+            print(f"Warning: No data points to plot for histogram at step {time_step}. Skipping.")
+            return
 
-        axs[0].hist(x_positions, bins=10, color='skyblue', edgecolor='black')
+        # --- Create Plot ---
+        fig, axs = plt.subplots(1, 2, figsize=(12, 5))  # Slightly wider figure
+        fig.suptitle(f'Position Histograms at Time Step {time_step}', fontsize=14)  # Add overall title
+
+        # --- X Histogram and Fit ---
+        # Plot histogram and get bin info
+        counts_x, bins_x, patches_x = axs[0].hist(x_positions, bins=num_bins, color='skyblue', edgecolor='black',
+                                                  alpha=0.7, label='X Data')
+        # Calculate statistics for fit
+        mean_x = np.mean(x_positions)
+        std_x = np.std(x_positions)
+        # Create points for the Gaussian curve
+        x_fit = np.linspace(bins_x[0], bins_x[-1], 100)
+        # Calculate Gaussian PDF
+        pdf_x = stats.norm.pdf(x_fit, mean_x, std_x)
+        # Scale PDF to match histogram counts (Area under PDF=1, Area under hist=N*bin_width)
+        bin_width_x = bins_x[1] - bins_x[0]
+        scale_factor_x = num_data_points * bin_width_x
+        # Plot scaled Gaussian fit
+        axs[0].plot(x_fit, pdf_x * scale_factor_x, 'r--', linewidth=2,
+                    label=f'Gaussian Fit\n(μ={mean_x:.2e}, σ={std_x:.2e})')
         axs[0].set_xlabel("X Position")
         axs[0].set_ylabel("Frequency")
-        axs[0].set_title(f"X Positions at Time Step {time_step}")
+        axs[0].set_title("X Positions")
+        axs[0].legend()
+        axs[0].grid(True, linestyle=':')
 
-        axs[1].hist(y_positions, bins=10, color='lightgreen', edgecolor='black')
+        # --- Y Histogram and Fit ---
+        # Plot histogram and get bin info
+        counts_y, bins_y, patches_y = axs[1].hist(y_positions, bins=num_bins, color='lightgreen', edgecolor='black',
+                                                  alpha=0.7, label='Y Data')
+        # Calculate statistics for fit
+        mean_y = np.mean(y_positions)
+        std_y = np.std(y_positions)
+        # Create points for the Gaussian curve
+        y_fit = np.linspace(bins_y[0], bins_y[-1], 100)
+        # Calculate Gaussian PDF
+        pdf_y = stats.norm.pdf(y_fit, mean_y, std_y)
+        # Scale PDF to match histogram counts
+        bin_width_y = bins_y[1] - bins_y[0]
+        scale_factor_y = num_data_points * bin_width_y
+        # Plot scaled Gaussian fit
+        axs[1].plot(y_fit, pdf_y * scale_factor_y, 'r--', linewidth=2,
+                    label=f'Gaussian Fit\n(μ={mean_y:.2e}, σ={std_y:.2e})')
         axs[1].set_xlabel("Y Position")
         axs[1].set_ylabel("Frequency")
-        axs[1].set_title(f"Y Positions at Time Step {time_step}")
+        axs[1].set_title("Y Positions")
+        axs[1].legend()
+        axs[1].grid(True, linestyle=':')
 
-        plt.tight_layout()
-        plt.show()
-
+        # --- Final Touches ---
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to make room for suptitle
+        # plt.show() # Keep this if you want plots to display immediately when called in a loop
     def plot_trajectory_on_grid_zoomed(self, walker_index=0, num_steps_to_plot=None, zoom_factor=1):
         """
         Plots the trajectory of a single walker, zooming in on the path.
@@ -1378,496 +1096,430 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
     print(f"Successful trials: {len(successful_results)}/{num_trials_total}")
     msd_stack = np.stack(successful_results, axis=0)
     avg_msd = np.mean(msd_stack, axis=0)
-    time_axis = np.arange(num_steps + 1)
+    time_axis = np.arange(num_steps + 1)*dt
     return avg_msd, time_axis
+
+
 # =============================================================================
+#IMPORT VECTORIZED DISORDER FUNCTIONS FROM ANOTHER FILE
 
-
-
-
-
-
-"""
-def main():
-    num_steps = 1000
-    num_trials = 1  # Set the number of independent trials
-    time = np.arange(num_steps + 1)
-
-    # Store MSD results for each trial
-    msd_no_rest_trials = []
-    #msd_gaussian_rest_trials = []
-    # msd_high_rest_trials = []
-    # msd_uniform_rest_trials = []
-    # msd_exponential_rest_trials = []
-    #msd_plateau_rest_trials = []
-    #msd_multi_center_rest_trials = []
-    msd_gaussian_rest_trials_new = []
-
-    for _ in range(num_trials):
-        # Simulate with different resting probabilities
-
-        rw_no_rest = RandomWalk(disorder_function=None, num_steps=num_steps)
-        rw_no_rest.trajectories(use_disorder=False)
-        msd_no_rest_trials.append(rw_no_rest.compute_msd())
-        '''
-        rw_gaussian_rest = RandomWalk(disorder_function=gaussian_rest_prob_streght, num_steps=num_steps)
-        rw_gaussian_rest.trajectories(use_disorder=True)
-        msd_gaussian_rest_trials.append(rw_gaussian_rest.compute_msd())
-        '''
-        rw_gaussian_rest_new = RandomWalk(disorder_function=corrected_gaussian_rest_prob_vectorized, num_steps=num_steps)
-        rw_gaussian_rest_new.trajectories(use_disorder=True)
-        msd_gaussian_rest_trials_new.append(rw_gaussian_rest_new.compute_msd())
-        '''
-        rw_high_rest = RandomWalk(disorder_function=my_spatial_disorder, num_steps=num_steps)
-        rw_high_rest.trajectories(use_disorder=True)
-        msd_high_rest_trials.append(rw_high_rest.compute_msd())  # Exclude time 0
-
-        rw_uniform_rest = RandomWalk(disorder_function=uniform_rest_prob, num_steps=num_steps)
-        rw_uniform_rest.trajectories(use_disorder=True)
-        msd_uniform_rest_trials.append(rw_uniform_rest.compute_msd())
-
-        rw_exponential_rest = RandomWalk(disorder_function=exponential_rest_prob, num_steps=num_steps)
-        rw_exponential_rest.trajectories(use_disorder=True)
-        msd_exponential_rest_trials.append(rw_exponential_rest.compute_msd())
-        
-
-        rw_plateu = RandomWalk(disorder_function=plateau_rest_prob, num_steps=num_steps)
-        rw_plateu.trajectories(use_disorder=True)
-        msd_plateau_rest_trials.append(rw_plateu.compute_msd())
-
-        rw_multi_center = RandomWalk(disorder_function=multi_center_rest_prob, num_steps=num_steps)
-        rw_multi_center.trajectories(use_disorder=True)
-        msd_multi_center_rest_trials.append(rw_multi_center.compute_msd())
-        '''
-        # Calculate the average MSD over all trials
-    avg_msd_no_rest = np.mean(msd_no_rest_trials, axis=0)
-    #avg_msd_gaussian_rest = np.mean(msd_gaussian_rest_trials, axis=0)
-    avg_msd_gaussian_rest_new = np.mean(msd_gaussian_rest_trials_new, axis=0)
-    # avg_msd_high_rest = np.mean(msd_high_rest_trials, axis=0)
-    # avg_msd_uniform_rest = np.mean(msd_uniform_rest_trials, axis=0)
-    # avg_msd_exponential_rest = np.mean(msd_exponential_rest_trials, axis=0)
-    #avg_msd_plateau = np.mean(msd_plateau_rest_trials, axis=0)
-    #avg_msd_multi_center = np.mean(msd_multi_center_rest_trials, axis=0)
-
-    '''
-    # Plotting averaged MSD on a log-log scale
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.loglog(time, avg_msd_no_rest, label='No Resting (rest_prob=0)')
-   # ax.loglog(time, avg_msd_gaussian_rest, label='Gaussian Resting Probability')
-    ax.loglog(time, avg_msd_gaussian_rest_new, label='Gaussian Resting Probability Corrected')
-    # ax.loglog(time, avg_msd_high_rest, label='High Resting Probability (rest_prob=0.9)')
-    # ax.loglog(time, avg_msd_uniform_rest, label='Uniform Resting Probability')
-    # ax.loglog(time, avg_msd_exponential_rest, label='Exponential Resting Probability')
-   # ax.loglog(time, avg_msd_plateau, label='Plateau Resting Probability')
-    #ax.loglog(time, avg_msd_multi_center, label='Multi Center Resting Probability')
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('MSD')
-    ax.set_title(f'Mean Squared Displacement (Log-Log Scale) - Averaged over {num_trials} Trials')
-    ax.grid(True)
-    ax.legend()
-    plt.show()
-
-    # Plotting averaged MSD/Time
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(time[1:], avg_msd_no_rest[1:] / time[1:], label='No Resting (rest_prob=0)')
-    #ax.plot(time[1:], avg_msd_gaussian_rest[1:] / time[1:], label='Gaussian Resting Probability')
-    ax.plot(time[1:], avg_msd_gaussian_rest_new[1:] / time[1:], label='Gaussian Resting Probability Corrected')
-    # ax.plot(time[1:], avg_msd_high_rest[1:] / time[1:], label='High Resting Probability (rest_prob=0.9)')
-    # ax.plot(time[1:], avg_msd_uniform_rest[1:] / time[1:], label='Uniform Resting Probability')
-    # ax.plot(time[1:], avg_msd_exponential_rest[1:] / time[1:], label='Exponential Resting Probability')
-    #ax.plot(time[1:], avg_msd_plateau[1:] / time[1:], label='Plateau Resting Probability')
-    #ax.plot(time[1:], avg_msd_multi_center[1:] / time[1:], label='Multi Center Resting Probability')
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('MSD / Time')
-    ax.set_title(f'Effective Diffusion Coefficient (MSD / Time) - Averaged over {num_trials} Trials')
-    ax.grid(True)
-    ax.legend()
-    plt.show()
-    '''
-    '''
-    #TEST PER IL RESTING TIME
-
-        # Test with no resting probability
-    num_steps=100
-    time = np.arange(1, num_steps + 1)
-    rw_no_rest = RandomWalk(disorder_function=None)
-    rw_no_rest.trajectories(use_disorder=False)
-    msd_no_rest = rw_no_rest.compute_msd()[1:]  # Exclude time 0
-
-    # Test with Gaussian resting probability
-    rw_gaussian_rest = RandomWalk(disorder_function=gaussian_rest_prob_streght, num_steps=num_steps)
-    rw_gaussian_rest.trajectories(use_disorder=True)
-    msd_gaussian_rest = rw_gaussian_rest.compute_msd()[1:]  # Exclude time 0
-
-    # Test with very high resting probability
-    rw_high_rest = RandomWalk(disorder_function=my_spatial_disorder, num_steps=num_steps)
-    rw_high_rest.trajectories(use_disorder=True)
-    msd_high_rest = rw_high_rest.compute_msd()[1:]  # Exclude time 0
-
-    #Test with uniform rest prob
-    rw_uniform = RandomWalk(disorder_function=uniform_rest_prob, num_steps=num_steps)
-    rw_uniform.trajectories(use_disorder=True)
-    msd_uniform = rw_uniform.compute_msd()[1:]  # Exclude time 0
-
-    # Test with uniform rest prob
-    rw_expo = RandomWalk(disorder_function=exponential_rest_prob, num_steps=num_steps)
-    rw_expo.trajectories(use_disorder=True)
-    msd_expo = rw_expo.compute_msd()[1:]  # Exclude time 0
-
-
-
-
-    # Plotting MSD/Time
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(time, msd_no_rest / time, label='No Resting (rest_prob=0)')
-    ax.plot(time, msd_gaussian_rest / time, label='Gaussian Resting Probability')
-    ax.plot(time, msd_high_rest / time, label='High Resting Probability (rest_prob=0.9)')
-    ax.plot(time, msd_uniform / time, label='Uniform resting probability (rest_prob=0.9)')
-    ax.plot(time, msd_expo / time, label='Exponential resting probability')
-
-
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('MSD / Time')
-    ax.set_title('Effective Diffusion Coefficient (MSD / Time)')
-    ax.grid(True)
-    ax.legend()
-    plt.show()
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.loglog(time, msd_no_rest, label='No Resting (rest_prob=0)')
-    ax.loglog(time, msd_gaussian_rest, label='Gaussian Resting Probability')
-    ax.loglog(time, msd_high_rest, label='High Resting Probability (rest_prob=0.9)')
-    ax.loglog(time, msd_uniform, label='Uniform Resting Probability')
-    ax.loglog(time, msd_expo, label='Exponential Resting Probability')
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('MSD')
-    ax.set_title('Mean Squared Displacement (Log-Log Scale)')
-    ax.grid(True)
-    ax.legend()
-    plt.show()
-    '''
-
-    '''
-    #rw = RandomWalk(disorder_function=my_spatial_disorder)
-    #rw=RandomWalk()
-    rw=RandomWalk(disorder_function=gaussian_rest_prob)
-    #rwo=RandomWalk(disorder_function=None)
-    num_steps=rw.num_steps
-    time = rw.time
-
-
-    rw.trajectories(use_disorder=True)
-    #rwo.trajectories(use_disorder=False)
-
-
-
-    #rw.plot_position_histograms(time_step=100)
-
-    msd = rw.compute_msd()
-    #msdo=rwo.compute_msd()
-
-
-
-    D=rw.compute_D()
-    print("Dp=",D[0])
-    print("slope (no disorder)[1]:",D[2])
-    print("intercept (no disorder)[]:", np.exp(D[3])/4)
-
-    #rw.plot_trajectory_on_grid_zoomed()
-
-
-
-    # Plotting MSD with slope 1 line
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.loglog(time, msd, 'b-', label='MSD')
-
-    # Generate a straight line with slope 1 in log-log space
-    # y = C * t^1  => log(y) = log(C) + 1 * log(t)
-    # We'll choose a C that roughly matches the MSD at later times for visual comparison
-    # Find a reasonable starting point for the line (e.g., halfway through the simulation)
-    mid_time_index = num_steps // 2
-    C = msd[mid_time_index] / time[mid_time_index] if time[mid_time_index] > 0 else 1e-6
-    slope_1_line = C * time
-
-    ax.loglog(time, slope_1_line, 'g--', label='Slope = 1')
-
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('MSD')
-    ax.set_title('Mean Squared Displacement with Slope 1 Line')
-    ax.grid(True)
-    ax.legend()
-    plt.show()
-
-    # Plotting MSD normalized by time
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(time[1:], msd[1:] / time[1:], 'b-', label='MSD/Time')
-    #ax.plot(time[1:], msdo[1:] / time[1:], 'r-', label='MSDO/Time')
-    ax.set_xlabel('Time Step')
-    ax.set_ylabel('MSD/Time')
-    ax.set_title('MSD normalized by time')
-    ax.grid(True)
-    ax.legend()
-    plt.show()
-
-
-    # Plot position histograms at different times
-    rw.plot_position_histograms(time_step=0)
-    rw.plot_position_histograms(time_step=num_steps // 4)
-    rw.plot_position_histograms(time_step=num_steps // 2)
-    rw.plot_position_histograms(time_step=num_steps - 1)
-    '''
-
-    '''
-
-    # Plot the trajectory of the first walker
-
-    total_msd=rw.compute_msd()
-    x_msd=rw.compute_msd(direction='x')
-    y_msd=rw.compute_msd(direction='y')
-    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
-    ax[0].minorticks_on()
-    ax[0].plot(np.array(rw.all_positions)[:, 0, 0], np.array(rw.all_positions)[:, 0, 1], c='r')
-    ax[0].set_xlabel("X Position")
-    ax[0].set_ylabel("Y Position")
-    ax[0].set_title("Trajectory of the First Walker")
-    ax[0].grid(visible=True, which='major', color='black', linestyle='-')
-    ax[0].grid(visible=True, which='minor', color='black', linestyle='--')
-
-    ax[0].set_aspect('equal', adjustable='box')
-
-    # Plot the Mean Squared Displacement over time
-    ax[1].minorticks_on()
-    ax[1].plot(time, total_msd, c='b')
-    ax[1].set_title("Mean Squared Displacement")
-    ax[1].grid(visible=True, which='major', color='black', linestyle='-')
-    ax[1].grid(visible=True, which='minor', color='black', linestyle='--')
-    ax[1].set_yscale('log')
-    ax[1].set_xscale('log')
-    plt.tight_layout()
-    plt.plot(time, total_msd, label='Total MSD')
-    plt.plot(time, x_msd, label='X MSD')
-    plt.plot(time, y_msd, label='Y MSD')
-    plt.xlabel('Time Step')
-    plt.ylabel('MSD')
-    plt.legend()
-    plt.show()
-
-
-    fig, ax = plt.subplots()
-    valid_indices = (time > 0)
-    time_valid = time[valid_indices]
-    ax.plot(time_valid,D[1])
-    plt.show()
-    '''
-    # rw.animate_trajectory(walker_index=0, interval=50)
-"""
-
+from vectorized_disorder_funcs import (
+    my_spatial_disorder_vectorized,
+    gaussian_rest_prob_vectorized,
+    uniform_rest_prob_vectorized,
+    plateau_rest_prob_vectorized,
+    multi_center_rest_prob_vectorized,
+    exponential_rest_prob_vectorized,
+    boundary_dependent_rest_prob_vectorized
+)
+# Use the VECTORIZED versions suitable for precomputation
+AVAILABLE_DISORDER_FUNCTIONS = {
+    "none": None, # Special case for ordered walk
+    "uniform": uniform_rest_prob_vectorized,
+    "gaussian": gaussian_rest_prob_vectorized,
+    "plateau": plateau_rest_prob_vectorized,
+    "multi_center": multi_center_rest_prob_vectorized,
+    "exponential": exponential_rest_prob_vectorized,
+    "boundary": boundary_dependent_rest_prob_vectorized,
+    "fixed_rest": my_spatial_disorder_vectorized, # Example name for the fixed rest one
+}
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Random Walk Simulation")
 
-    # --- Simulation Parameters ---
-    ENABLE_CTRW = True  # <<< SET TO True TO ENABLE CTRW, False FOR STANDARD REST >>>
-    CTRW_ALPHA = 0.7  # <<< SET desired exponent if ENABLE_CTRW is True >>>
+    # --- Core Simulation Parameters ---
+    parser.add_argument('--steps', type=int, default=1000, help='Number of simulation steps')
+    parser.add_argument('--walkers', type=int, default=100, help='Number of walkers')
+    parser.add_argument('--trials', type=int, default=10, help='Number of parallel trials')
+    parser.add_argument('--step_size', type=float, default=0.001, help='Step size per move')
+    parser.add_argument('--dt', type=float, default=0.0001, help='Time step duration')
+    parser.add_argument('--grid_size', type=int, default=2000, help='Grid resolution (grid_size x grid_size)')
 
+    # --- CTRW Parameters ---
+    parser.add_argument('--ctrw', action='store_true', help='Enable Continuous Time Random Walk (CTRW)')
+    parser.add_argument('--alpha', type=float, default=0.7, help='CTRW exponent alpha (0 < alpha < 1)')
 
+    # --- Disorder Function Selection ---
+    parser.add_argument('--disorder', type=str, default='none',
+                        choices=AVAILABLE_DISORDER_FUNCTIONS.keys(),
+                        help='Type of disorder function to use')
 
+    # --- Disorder Function Parameters (add arguments for parameters of ALL functions) ---
+    # Note: Only parameters relevant to the chosen --disorder will be used.
+    # Gaussian / Exponential / Plateau / Multi-Center / Fixed
+    parser.add_argument('--max_rest', type=float,
+                        help='Max resting probability (for gaussian, plateau, exp, multi_center, fixed_rest)')
+    parser.add_argument('--sigma', type=float, help='Sigma for Gaussian disorder')
+    # Uniform
+    parser.add_argument('--rest_level', type=float, help='Uniform rest level')
+    # Plateau
+    parser.add_argument('--plateau_radius', type=float, help='Radius for plateau disorder')
+    parser.add_argument('--decay_rate', type=float, help='Decay rate (for plateau, exp, multi_center, boundary)')
+    # Multi-Center (simplified example, could add center coords too)
+    parser.add_argument('--strength1', type=float, help='Strength for multi-center 1')
+    parser.add_argument('--strength2', type=float, help='Strength for multi-center 2')
+    # Boundary
+    parser.add_argument('--boundary_strength', type=float, help='Strength for boundary disorder')
+    # Fixed Rest (my_spatial_disorder_vectorized)
+    parser.add_argument('--rest_fixed', type=float, help='Fixed rest probability for fixed_rest type')
 
-    # --- Simulation Parameters ---
-    NUM_TRIALS = 20 # Number of parallel trials
-    NUM_STEPS = 10000 # Number of steps per trial
-    NUM_WALKERS = 100
-    STEP_SIZE = 0.001
-    TIME_STEP_DT = 0.0001
+    # --- Animation Control ---
+    parser.add_argument('--animate', action='store_true', help='Run a single trial and generate animation')
+    parser.add_argument('--anim_steps', type=int, default=500, help='Number of steps for animation run')
+    parser.add_argument('--anim_walker', type=int, default=0, help='Index of walker to animate')
+    parser.add_argument('--save_anim', action='store_true',help='Save the animation file (requires --animate)')
+    parser.add_argument('--anim_file', type=str, default='walk_animation.gif', help='Output filename for animation')
 
-    # Define grid (consider making it smaller if memory/precomputation is slow)
-    grid_size = 2000 # Example: Use a smaller grid for testing
-    print(f"Setting up grid ({grid_size}x{grid_size})...")
-    XV, YV = np.meshgrid(np.linspace(-1, 1, grid_size), np.linspace(-1, 1, grid_size))
+    # --- Histogram Control ---
+    parser.add_argument('--histograms', action='store_true',
+                        help='Run a single trial and show position histograms')
+    parser.add_argument('--hist_steps', type=int, nargs='+',  # Expect one or more integers
+                        help='List of time steps (integers) to plot histograms for (requires --histograms)')
+
+    args = parser.parse_args()
+
+    # --- Validate Histogram Arguments ---
+    if args.histograms and not args.hist_steps:
+        parser.error("--histograms requires --hist_steps to be specified.")
+    if args.hist_steps and not args.histograms:
+        print("Warning: --hist_steps provided but --histograms flag is missing. Histograms will not be generated.")
+        # Or parser.error if you want it to be strict
+
+    args = parser.parse_args()
+
+    # --- Select the Disorder Function ---
+    selected_disorder_func = AVAILABLE_DISORDER_FUNCTIONS[args.disorder]
+
+    # --- Build Disorder Parameters Dictionary ---
+    # Include only non-None arguments relevant to the selected function (or CTRW)
+    disorder_params = {}
+    potential_params = {
+        'max_rest_strength': args.max_rest,  # Name used in gaussian_rest_prob_vectorized
+        'sigma': args.sigma,
+        'rest_level': args.rest_level,
+        'plateau_radius': args.plateau_radius,
+        'max_rest': args.max_rest,  # Name used in plateau, exp, multi_center
+        'decay_rate': args.decay_rate,
+        'strength1': args.strength1,
+        'strength2': args.strength2,
+        'max_total_rest': args.max_rest,  # Used in multi_center, boundary
+        'boundary_strength': args.boundary_strength,
+        'rest_fixed': args.rest_fixed,  # Used in my_spatial_disorder_vectorized
+    }
+    for key, value in potential_params.items():
+        if value is not None:
+            disorder_params[key] = value
+
+    # Add CTRW alpha if enabled
+    if args.ctrw:
+        if not (0 < args.alpha < 1):
+            parser.error("--alpha must be between 0 and 1 for CTRW")
+        disorder_params['ctrw_alpha'] = args.alpha
+        print(f"CTRW Enabled with alpha = {args.alpha}")
+    else:
+        print("CTRW Disabled (Standard Rest/Movement)")
+
+    # --- Setup Grid ---
+    print(f"Setting up grid ({args.grid_size}x{args.grid_size})...")
+    XV, YV = np.meshgrid(np.linspace(-1, 1, args.grid_size), np.linspace(-1, 1, args.grid_size))
     print("Grid setup done.")
 
-    # --- Select Disorder Function and Parameters ---
-    # Example: Corrected Gaussian
-    DISORDER_FUNC = corrected_gaussian_rest_prob_vectorized # Use the vectorized version
-    DISORDER_PARAMS = {'sigma': 1.0, 'max_rest_strength': 0.95}
-    if ENABLE_CTRW:
-        DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
+    # --- Run Parallel Simulation for MSD ---
+    print(f"\n--- Running Parallel Simulation ({args.trials} Trials) ---")
+    print(f"Disorder Function: {args.disorder}")
+    print(f"Parameters: {disorder_params}")
 
-
-
-    # Example: No disorder
-    #DISORDER_FUNC = None
-    #DISORDER_PARAMS = {}
-    #if ENABLE_CTRW:
-     #   DISORDER_PARAMS['ctrw_alpha'] = CTRW_ALPHA # Add alpha only if CTRW is on
-
-
-    # --- Run the parallel simulation ---
     avg_msd, time_axis = main_parallel(
-        num_trials_total=NUM_TRIALS,
-        num_steps=NUM_STEPS,
-        num_walkers=NUM_WALKERS,
-        step=STEP_SIZE,
-        dt=TIME_STEP_DT,
-        disorder_function=DISORDER_FUNC,
-        disorder_params=DISORDER_PARAMS,
+        num_trials_total=args.trials,
+        num_steps=args.steps,
+        num_walkers=args.walkers,
+        step=args.step_size,
+        dt=args.dt,
+        disorder_function=selected_disorder_func,  # Pass the selected function object
+        disorder_params=disorder_params,  # Pass the constructed params
         xv=XV,
         yv=YV,
-        use_ctrw_flag=ENABLE_CTRW  # Pass the flag
+        use_ctrw_flag=args.ctrw
     )
 
-    # --- Quantitative Analysis & Plotting Results ---
+    # --- Quantitative Analysis ---
+    # --- Quantitative Analysis ---
     if avg_msd is not None and time_axis is not None:
         print("\n" + "=" * 30)
         print(" Quantitative Analysis Results")
         print("=" * 30)
 
-        # === Method 1: Fit Log-Log MSD ===
-        print("\n--- Analysis Method 1: Log-Log MSD Fit ---")
-        N_min_fit = NUM_STEPS // 2  # Example: Fit last half
-        N_max_fit = NUM_STEPS
-        N_min_fit = max(100, N_min_fit)  # Ensure minimum range, avoid early transients
+        # Define fit range (e.g., last half of the data, avoiding first few points)
+        min_fit_step = max(10, args.steps // 2)  # Start fit from step 10 or halfway, whichever is later
+        max_fit_step = args.steps
+        print(f"Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")  # Print range once
 
-        if N_max_fit <= N_min_fit:
-            print("Not enough time steps for fitting range.")
-        else:
-            time_fit_range = time_axis[N_min_fit: N_max_fit + 1]
-            msd_fit_range = avg_msd[N_min_fit: N_max_fit + 1]
-            valid_indices = (time_fit_range > 0) & (msd_fit_range > 0)
-            if np.sum(valid_indices) < 2:
-                print("Not enough valid data points for log-log fit.")
+        # Initialize fit results to NaN
+        fitted_alpha_msd = np.nan
+        fit_intercept_msd = np.nan
+        fitted_alpha_msd_t = np.nan
+
+        # Check if the range is valid
+        if max_fit_step > min_fit_step and len(time_axis) > max_fit_step:
+            # Get indices corresponding to the step range
+            idx_min = min_fit_step
+            idx_max = max_fit_step
+            time_fit_range = time_axis[idx_min: idx_max + 1]
+            msd_fit_range = avg_msd[idx_min: idx_max + 1]
+
+            # --- 1. Fit Log-Log MSD to find alpha exponent ---
+            print("\n--- Method 1: Log-Log MSD Fit (log(MSD) vs log(t)) ---")
+            valid_fit_indices_msd = (time_fit_range > 1e-15) & (msd_fit_range > 1e-15)
+            if np.sum(valid_fit_indices_msd) >= 2:
+                log_time_msd = np.log(time_fit_range[valid_fit_indices_msd])
+                log_msd = np.log(msd_fit_range[valid_fit_indices_msd])
+                try:
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(log_time_msd, log_msd)
+                    fitted_alpha_msd = slope
+                    fit_intercept_msd = intercept  # log(C)
+                    print(f"  Estimated Alpha (Slope) = {fitted_alpha_msd:.4f}")
+                    print(f"  Standard Error          = {std_err:.4f}")
+                    print(f"  R-squared               = {r_value ** 2:.4f}")
+                except Exception as e:
+                    print(f"  Error during log-log MSD fit: {e}")
             else:
-                time_log = np.log(time_fit_range[valid_indices])
-                msd_log = np.log(msd_fit_range[valid_indices])
-                slope, intercept, r_value, p_value, std_err = stats.linregress(time_log, msd_log)
-                alpha_estimate = slope
-                print(f"Fit Range N = [{N_min_fit}, {N_max_fit}]")
-                print(f"  Estimated alpha (slope) = {alpha_estimate:.4f}")
-                print(f"  Standard Error          = {std_err:.4f}")
-                print(f"  R-squared               = {r_value ** 2:.4f}")
+                print(f"  Not enough valid data points ({np.sum(valid_fit_indices_msd)}) for log-log MSD fit.")
 
-        # === Method 2: Fit Log-Log MSD/N ===
-        print("\n--- Analysis Method 2: Log-Log MSD/N Fit ---")
-        time_eff = time_axis[1:]
-        msd_over_n = avg_msd[1:] / time_eff
-
-        # Use same fit range N_min_fit, N_max_fit
-        if N_max_fit <= N_min_fit:
-            print("Not enough time steps for fitting range.")
-        else:
-            idx_min = N_min_fit - 1;
-            idx_max = N_max_fit - 1
-            time_fit_range_eff = time_eff[idx_min: idx_max + 1]
-            msd_over_n_fit_range = msd_over_n[idx_min: idx_max + 1]
-            valid_indices_eff = (time_fit_range_eff > 0) & (msd_over_n_fit_range > 0)
-            if np.sum(valid_indices_eff) < 2:
-                print("Not enough valid data points for log-log MSD/N fit.")
+            # --- 2. Fit Log-Log MSD/Time to find alpha-1 exponent ---
+            print("\n--- Method 2: Log-Log MSD/Time Fit (log(MSD/t) vs log(t)) ---")
+            msd_over_time_fit_range = msd_fit_range / time_fit_range  # Calculate MSD/t for the range
+            valid_fit_indices_msd_t = (time_fit_range > 1e-15) & (msd_over_time_fit_range > 1e-15)  # Check MSD/t > 0
+            if np.sum(valid_fit_indices_msd_t) >= 2:
+                log_time_msd_t = np.log(time_fit_range[valid_fit_indices_msd_t])
+                log_msd_over_time = np.log(msd_over_time_fit_range[valid_fit_indices_msd_t])
+                try:
+                    slope_alpha_minus_1, intercept_b, r_value_b, p_value_b, std_err_b = stats.linregress(log_time_msd_t,
+                                                                                                         log_msd_over_time)
+                    # Implied alpha = slope + 1
+                    fitted_alpha_msd_t = slope_alpha_minus_1 + 1.0
+                    print(f"  Estimated Alpha-1 (Slope) = {slope_alpha_minus_1:.4f}")
+                    print(f"  Implied Alpha             = {fitted_alpha_msd_t:.4f}")
+                    print(f"  Standard Error (Slope)  = {std_err_b:.4f}")
+                    print(f"  R-squared                 = {r_value_b ** 2:.4f}")
+                except Exception as e:
+                    print(f"  Error during log-log MSD/t fit: {e}")
             else:
-                time_log_eff = np.log(time_fit_range_eff[valid_indices_eff])
-                msd_over_n_log = np.log(msd_over_n_fit_range[valid_indices_eff])
-                slope_b, intercept_c, r_value_b, p_value_b, std_err_b = stats.linregress(time_log_eff, msd_over_n_log)
-                alpha_minus_1_estimate = slope_b
-                alpha_estimate_from_b = slope_b + 1.0
-                print(f"Fit Range N = [{N_min_fit}, {N_max_fit}]")
-                print(f"  Estimated alpha-1 (slope) = {alpha_minus_1_estimate:.4f}")
-                print(f"  Implied alpha             = {alpha_estimate_from_b:.4f}")
-                print(f"  Standard Error (of slope) = {std_err_b:.4f}")
-                print(f"  R-squared                 = {r_value_b ** 2:.4f}")
+                print(f"  Not enough valid data points ({np.sum(valid_fit_indices_msd_t)}) for log-log MSD/t fit.")
+
+        else:
+            print(f"  Fit range [{min_fit_step}, {max_fit_step}] invalid or insufficient data length.")
+
+
+
+        # --- 3. Calculate Effective Diffusion Coefficient ---
+        print("\n--- Effective Diffusion Coefficient (D_eff = MSD / 4t) ---")
+        # Calculate D_eff over the same fit range used for alpha
+        if max_fit_step > min_fit_step and len(time_axis) > max_fit_step:
+            time_eff = time_axis[idx_min: idx_max + 1]
+            msd_eff = avg_msd[idx_min: idx_max + 1]
+            valid_eff_indices = (time_eff > 1e-15)  # Avoid division by zero
+
+            if np.any(valid_eff_indices):
+                # Calculate D_eff = MSD / (4*t) for valid points in the range
+                d_eff_values = msd_eff[valid_eff_indices] / (4 * time_eff[valid_eff_indices])
+
+                # Report the average D_eff in the fit range
+                avg_d_eff = np.mean(d_eff_values)
+                # Report D_eff at the end of the fit range
+                final_d_eff = d_eff_values[-1]
+
+                print(f"Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")
+                print(f"  Average D_eff in range = {avg_d_eff:.4e}")
+                print(f"  Final D_eff in range   = {final_d_eff:.4e}")
+            else:
+                print("  No valid time points > 0 in range for D_eff calculation.")
+                avg_d_eff = np.nan
+                final_d_eff = np.nan
+        else:
+            print(f"  Fit range [{min_fit_step}, {max_fit_step}] invalid or insufficient data.")
+            avg_d_eff = np.nan
+            final_d_eff = np.nan
+
+        # --- 4. Theoretical Comparison (for ordered case) ---
+        # Calculate theoretical D for the standard ordered walk
+        D_theory_ordered = args.step_size ** 2 / (4 * args.dt)
+        print("\n--- Theoretical Comparison ---")
+        print(f"  Theoretical D (Ordered Walk) = {D_theory_ordered:.4e}")
+        if args.disorder == 'none' and not args.ctrw:
+            print(f"  (Simulation matches theoretical D if Avg D_eff -> Theoretical D)")
+        else:
+            print(f"  (Disorder/CTRW expected to reduce D_eff compared to theoretical)")
+
         print("=" * 30 + "\n")
 
-        # --- Your existing plotting code ---
-        print("Plotting results...")
-        mode_label = f"CTRW alpha={CTRW_ALPHA}" if ENABLE_CTRW else "Standard Rest"
-        func_name = DISORDER_FUNC.__name__ if DISORDER_FUNC else "No Resting"
-
+        # --- Plotting ---
+        print("--- Plotting Averaged Results ---")
         # Plot MSD/Time
-        fig1, ax1 = plt.subplots(figsize=(10, 6))
-        ax1.plot(time_axis[1:], avg_msd[1:] / time_axis[1:], label=f'{func_name} ({mode_label})')
-        ax1.set_xlabel('Time Step')
-        ax1.set_ylabel('MSD / Time Step')
-        ax1.set_title(f'Avg Effective Diffusion Coefficient ({NUM_TRIALS} Trials)')
-        ax1.grid(True);
-        ax1.legend()
-        plt.savefig(f"msd_over_time_{'ctrw' if ENABLE_CTRW else 'std'}.png")
+        plt.figure(figsize=(10, 6))
+        valid_div = time_axis > 1e-15
+        if np.any(valid_div):
+            msd_over_time = avg_msd[valid_div] / time_axis[valid_div]
+            plt.plot(time_axis[valid_div], msd_over_time, label=f'MSD/Time ({args.disorder})')
+            # Add horizontal line for theoretical D*4 (only makes sense for normal diffusion)
+            plt.axhline(4 * D_theory_ordered, color='r', linestyle='--', alpha=0.7,
+                        label=f'4 * D_theory (Ordered) = {4 * D_theory_ordered:.2e}')
+        plt.xlabel('Time (s)')
+        plt.ylabel('MSD / Time')
+        plt.title(f'Avg Effective Diffusion Coefficient ({args.trials} Trials)')
+        plt.grid(True);
+        plt.legend();
+        plt.show()
 
         # Plot Log-Log MSD
-        fig2, ax2 = plt.subplots(figsize=(10, 6))
-        valid = (time_axis > 0) & (avg_msd > 0)
-        ax2.loglog(time_axis[valid], avg_msd[valid], label=f'{func_name} ({mode_label})')
-        # Add slope=1 line for reference
-        if np.any(valid):
-            first_msd = avg_msd[valid][0];
-            first_time = time_axis[valid][0]
-            # Use calculated alpha if available and reliable, otherwise default to 1 for guide
-            guide_alpha = alpha_estimate if 'alpha_estimate' in locals() and not np.isnan(alpha_estimate) else 1.0
-            # Generate fit line using results from Method 1
-            if 'alpha_estimate' in locals() and not np.isnan(alpha_estimate):
-                fit_line = np.exp(intercept) * (time_axis[valid] ** alpha_estimate)
-                ax2.loglog(time_axis[valid], fit_line, 'r--', alpha=0.7, label=f'Fit (alpha={alpha_estimate:.3f})')
-            else:  # Fallback slope=1 guide if fit failed
-                slope_1_line = (first_msd / first_time) * time_axis[valid]
-                ax2.loglog(time_axis[valid], slope_1_line, 'r--', alpha=0.7, label='Slope=1 guide')
+        plt.figure(figsize=(10, 6))
+        valid_log = (time_axis > 1e-15) & (avg_msd > 1e-15)
+        if np.any(valid_log):
+            plt.loglog(time_axis[valid_log], avg_msd[valid_log], label=f'MSD ({args.disorder})')
+            # Plot theoretical line
+            slope_1_line = 4 * D_theory_ordered * time_axis[valid_log]
+            plt.loglog(time_axis[valid_log], slope_1_line, 'r--', alpha=0.7,
+                       label=f'Slope=1 (Theory D={D_theory_ordered:.2e})')
+            # Plot the fitted line if fit was successful
+            if not np.isnan(fitted_alpha_msd) and not np.isnan(fit_intercept_msd):
+                # Calculate fitted line: MSD = exp(intercept) * t^alpha
+                fit_line_msd = np.exp(fit_intercept_msd) * (time_axis[valid_log] ** fitted_alpha_msd)
+                plt.loglog(time_axis[valid_log], fit_line_msd, 'g:', alpha=0.9, linewidth=2,
+                           label=f'Fit (alpha={fitted_alpha_msd:.3f})')
 
-            slope_1_line = (first_msd / first_time) * time_axis[valid]
-            ax2.loglog(time_axis[valid], slope_1_line, 'g--', alpha=0.7, label='Slope=1 standard diffusion')
-        ax2.set_xlabel('Time Step');
-        ax2.set_ylabel('MSD')
-        ax2.set_title(f'Avg Mean Squared Displacement (Log-Log, {NUM_TRIALS} Trials)')
-        ax2.grid(True, which='both');
-        ax2.legend()
-        plt.savefig(f"msd_loglog_{'ctrw' if ENABLE_CTRW else 'std'}.png")
-
+        plt.xlabel('Time (s)')
+        plt.ylabel('MSD')
+        plt.title(f'Avg Mean Squared Displacement (Log-Log, {args.trials} Trials)')
+        plt.grid(True, which='both');
+        plt.legend();
         plt.show()
+
     else:
-        print("Simulation failed, skipping analysis and plotting.")
-    """
+        print("Parallel simulation failed or produced no results, skipping analysis and plotting.")
 
-    print("\nRunning a single trial for animation...")
+        # --- Optional: Run Single Trial for Animation ---
+    if args.animate:
+        print("\n--- Running Single Trial for Animation ---")
+        # Setup grid for animation (can be same or different)
+        XV_anim, YV_anim = np.meshgrid(np.linspace(-1, 1, args.grid_size),np.linspace(-1, 1, args.grid_size))  # Use grid_size for consistency
+
+        # Instantiate RandomWalk with store_history=True
+        # Make sure RandomWalk class definition exists above
+        try:
+            rw_anim = RandomWalk(
+                num_steps=args.anim_steps,
+                num_walkers=args.walkers,  # Use same number of walkers
+                step=args.step_size,
+                dt=args.dt,
+                xv=XV_anim,
+                yv=YV_anim,
+                disorder_function=selected_disorder_func,  # Use same selected function
+                disorder_params=disorder_params,  # Use same constructed params
+                use_ctrw=args.ctrw,
+                store_history=True  # <<< Enable history storage
+            )
+        except NameError:
+            print("ERROR: RandomWalk class not defined before animation block.")
+            # Handle error appropriately, maybe exit
+            import sys
+
+            sys.exit(1)
+        except Exception as e:
+            print(f"ERROR: Failed to initialize RandomWalk for animation: {e}")
+            import sys
+
+            sys.exit(1)
+
+        # Determine if disorder is used for this specific run
+        use_disorder_anim = (selected_disorder_func is not None)
+
+        # Run the trajectories method
+        print(f"Running animation trajectory ({args.anim_steps} steps)...")
+        rw_anim.trajectories(use_disorder=use_disorder_anim)
+
+        # Generate animation
+        print("Generating/Showing animation...")
+        # Make sure animate_trajectory method exists in RandomWalk class
+        try:
+            rw_anim.animate_trajectory(
+                walker_index=args.anim_walker,
+                interval=50,  # Example interval
+                save_animation=args.save_anim,  # <<< Use the flag value here
+                filename=args.anim_file
+            )
+            if args.save_anim:  # Optional: Print message only if saving attempt was made
+                # Note: animate_trajectory should print success/failure messages
+                print(f"Animation saving process initiated for {args.anim_file}")
+            else:
+                print("Animation displayed interactively.")
+
+        except AttributeError:
+            print("ERROR: animate_trajectory method not found in RandomWalk class.")
+        except Exception as e:
+            print(f"ERROR: Failed during animation generation/display: {e}")
+
+        # --- Optional: Run Single Trial for Histograms ---
+    if args.histograms and args.hist_steps:
+        print("\n--- Running Single Trial for Histograms ---")
+        # Determine the maximum step needed for histograms
+        max_hist_step = max(args.hist_steps)
+        # Ensure the simulation runs long enough for the latest histogram
+        hist_run_steps = max(args.steps, max_hist_step)  # Use main steps or max hist step, whichever is longer
+        print(f"Running simulation up to step {hist_run_steps} to generate requested histograms.")
+
+        # Setup grid for histogram run (can be same or different)
+        XV_hist, YV_hist = np.meshgrid(np.linspace(-1, 1, args.grid_size), np.linspace(-1, 1, args.grid_size))
+
+        # Instantiate RandomWalk with store_history=True
+        try:
+            rw_hist = RandomWalk(
+                num_steps=hist_run_steps,  # Run enough steps
+                num_walkers=args.walkers,
+                step=args.step_size,
+                dt=args.dt,
+                xv=XV_hist,
+                yv=YV_hist,
+                disorder_function=selected_disorder_func,
+                disorder_params=disorder_params,
+                use_ctrw=args.ctrw,
+                store_history=True  # <<< MUST store history
+            )
+        except NameError:
+            print("ERROR: RandomWalk class not defined before histogram block.")
+            import sys;
+
+            sys.exit(1)
+        except Exception as e:
+            print(f"ERROR: Failed to initialize RandomWalk for histograms: {e}")
+            import sys;
+
+            sys.exit(1)
+
+        # Determine if disorder is used
+        use_disorder_hist = (selected_disorder_func is not None)
+
+        # Run the trajectories method
+        print(f"Running histogram trajectory ({hist_run_steps} steps)...")
+        rw_hist.trajectories(use_disorder=use_disorder_hist)
+
+        # Generate histograms
+        print("Generating Histograms...")
+        # Make sure plot_position_histograms method exists
+        try:
+            for step_to_plot in args.hist_steps:
+                if step_to_plot <= hist_run_steps:
+                    print(f"  Plotting histogram for step {step_to_plot}...")
+                    # Ensure the method exists and handles potential errors
+                    rw_hist.plot_position_histograms(time_step=step_to_plot)
+                else:
+                    # This case shouldn't happen due to hist_run_steps calculation, but good practice
+                    print(
+                        f"  Warning: Requested histogram step {step_to_plot} exceeds simulation length ({hist_run_steps}). Skipping.")
+            # Ensure plots are displayed if running interactively
+            plt.show()  # Add this if plots don't show automatically
+        except AttributeError:
+            print("ERROR: plot_position_histograms method not found in RandomWalk class.")
+        except Exception as e:
+            print(f"ERROR: Failed during histogram generation: {e}")
+
+    print("\nSimulation Finished.")
 
 
-    # Use the same simulation parameters
-    ENABLE_CTRW_ANIM = True  # Or True, depending on what you want to animate
-    CTRW_ALPHA_ANIM = 0.7
-    NUM_STEPS_ANIM = 1000  # Can be shorter for faster animation generation
-    NUM_WALKERS_ANIM = 100
-    STEP_SIZE_ANIM = 0.001
-    TIME_STEP_DT_ANIM = 0.0001
-    grid_size_anim = 200  # Smaller grid might be okay for visualization
-    XV_anim, YV_anim = np.meshgrid(np.linspace(-1, 1, grid_size_anim), np.linspace(-1, 1, grid_size_anim))
-
-    # Select disorder function for animation run
-    #DISORDER_FUNC_ANIM = None  # Example: Ordered walk
-    #DISORDER_PARAMS_ANIM = {}
-    # OR
-    DISORDER_FUNC_ANIM = corrected_gaussian_rest_prob_vectorized
-    DISORDER_PARAMS_ANIM = {'sigma': 1.0, 'max_rest_strength': 0.95}
-    if ENABLE_CTRW_ANIM:
-        DISORDER_PARAMS_ANIM['ctrw_alpha'] = CTRW_ALPHA_ANIM
-
-    # **** Crucial Step: Instantiate with store_history=True ****
-    rw_anim = RandomWalk(
-        num_steps=NUM_STEPS_ANIM,
-        num_walkers=NUM_WALKERS_ANIM,
-        step=STEP_SIZE_ANIM,
-        dt=TIME_STEP_DT_ANIM,
-        xv=XV_anim,
-        yv=YV_anim,
-        disorder_function=DISORDER_FUNC_ANIM,
-        disorder_params=DISORDER_PARAMS_ANIM,
-        use_ctrw=ENABLE_CTRW_ANIM,
-        store_history=True  # <--- SET THIS TO TRUE
-    )
-
-    # Determine if disorder is used for this specific run
-    use_disorder_anim = (DISORDER_FUNC_ANIM is not None)
-
-    # Run the trajectories method for this single instance
-    rw_anim.trajectories(use_disorder=use_disorder_anim)
-
-    # --- Now you can animate ---
-    print("Generating animation...")
-    # Improve the check in animate_trajectory itself:
-    if hasattr(rw_anim, 'all_positions') and rw_anim.all_positions is not None and len(rw_anim.all_positions) > 0:
-        rw_anim.animate_trajectory(walker_index=0, interval=50, save_animation=False, filename="walk_animation.gif")
-        print("Animation finished")
-    else:
-        print("Could not generate animation: Position history was not stored.")
-    """
