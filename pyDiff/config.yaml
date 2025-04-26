@@ -1,0 +1,49 @@
+simulation:
+  steps: 1000        # Steps for main MSD run
+  walkers: 100
+  trials: 20          # Parallel trials for MSD
+  dt: 0.0001
+  step_size: 0.001
+
+grid:
+  size: 2000           # Resolution (size x size)
+  min: -1.0
+  max: 1.0            # Grid extends from min to max
+
+boundaries:
+  pbc: false          # Use Periodic Boundary Conditions?
+  check_bounds: false  # Check if walkers leave grid? (Ignored if pbc is true)
+
+disorder:
+  # Type must be one of the keys in AVAILABLE_DISORDER_FUNCTIONS in the script
+  # e.g., none, gaussian, uniform, plateau, etc.
+  type: none
+  # Parameters specific to the chosen disorder type
+  # Only parameters relevant to 'type' above will be used
+  params:
+    #sigma: 0.1
+    #max_rest_strength: 0.9 # For gaussian
+    # rest_level: 0.2       # For uniform
+    # plateau_radius: 0.1   # For plateau
+    # max_rest: 0.8         # For plateau, exp, multi_center
+    # decay_rate: 10.0      # For plateau, exp, multi_center, boundary
+    # etc...
+
+ctrw:
+  enabled: false
+  alpha: 0.7            # Ignored if enabled is false
+
+# Optional sections for single-run visualizations
+# If 'enabled' is false or the section is missing, it will be skipped
+
+animation:
+  enabled: false
+  save: false           # Save the animation file? If false, shows interactively.
+  steps: 500            # Number of steps for the animation run
+  walker_index: 0
+  filename: 'walk_animation.gif' # Used only if save is true
+
+histograms:
+  enabled: true
+  # List of simulation steps (integers) to generate histograms for
+  steps_to_plot: [1000, 5000, 10000]

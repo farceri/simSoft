@@ -7,6 +7,7 @@ import multiprocessing # Import the module
 import time as timer # To time the execution
 import os # To potentially get CPU count
 import argparse # Import argparse
+import yaml
 '''
 
 
@@ -1136,6 +1137,8 @@ AVAILABLE_DISORDER_FUNCTIONS = {
     "fixed_rest": my_spatial_disorder_vectorized, # Example name for the fixed rest one
 }
 if __name__ == "__main__":
+
+    '''
     parser = argparse.ArgumentParser(description="Run Random Walk Simulation")
 
     # --- Core Simulation Parameters ---
@@ -1236,7 +1239,8 @@ if __name__ == "__main__":
         print(f"CTRW Enabled with alpha = {args.alpha}")
     else:
         print("CTRW Disabled (Standard Rest/Movement)")
-
+    
+    
     # --- Setup Grid ---
     print(f"Setting up grid ({args.grid_size}x{args.grid_size})...")
     XV, YV = np.meshgrid(np.linspace(-1, 1, args.grid_size), np.linspace(-1, 1, args.grid_size))
@@ -1246,23 +1250,130 @@ if __name__ == "__main__":
     print(f"\n--- Running Parallel Simulation ({args.trials} Trials) ---")
     print(f"Disorder Function: {args.disorder}")
     print(f"Parameters: {disorder_params}")
+    '''
 
+    # --- Argument Parser: Only for the config file path ---
+    parser = argparse.ArgumentParser(description="Run Random Walk Simulation from Config File")
+    parser.add_argument('config_file', type=str,
+                        help='Path to the YAML configuration file')
+    args = parser.parse_args()  # args now only contains args.config_file
+
+    # --- Load Configuration from YAML File ---
+    try:
+        with open(args.config_file, 'r') as f:
+            config = yaml.safe_load(f)
+        print(f"Configuration loaded successfully from {args.config_file}")
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at {args.config_file}")
+        import sys;
+
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print(f"Error parsing YAML file {args.config_file}: {e}")
+        import sys;
+
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred loading config: {e}")
+        import sys;
+
+        sys.exit(1)
+
+    # --- Extract Parameters (using .get() for safety/defaults) ---
+    # Simulation Params
+    sim_params = config.get('simulation', {})
+    steps = sim_params.get('steps', 1000)
+    walkers = sim_params.get('walkers', 100)
+    trials = sim_params.get('trials', 10)  # Use this variable 'trials'
+    dt = sim_params.get('dt', 0.0001)  # Use this variable 'dt'
+    step_size = sim_params.get('step_size', 0.001)  # Use this variable 'step_size'
+
+    # Grid Params
+    grid_params = config.get('grid', {})
+    grid_size = grid_params.get('size', 200)  # Use this variable 'grid_size'
+    grid_min = grid_params.get('min', -1.0)
+    grid_max = grid_params.get('max', 1.0)
+
+    # Boundary Params
+    boundary_params = config.get('boundaries', {})
+    use_pbc = boundary_params.get('pbc', False)  # Use this variable 'use_pbc'
+    check_bounds = boundary_params.get('check_bounds', False) if not use_pbc else False  # Use 'check_bounds'
+
+    # CTRW Params
+    ctrw_params = config.get('ctrw', {})
+    use_ctrw = ctrw_params.get('enabled', False)  # Use this variable 'use_ctrw'
+    ctrw_alpha = ctrw_params.get('alpha', 0.7)
+
+    # Disorder Params
+    disorder_config = config.get('disorder', {})
+    disorder_type = disorder_config.get('type', 'none')  # Use this variable 'disorder_type'
+    disorder_params = disorder_config.get('params', {})
+    if disorder_type not in AVAILABLE_DISORDER_FUNCTIONS:
+        print(
+            f"Error: Unknown disorder type '{disorder_type}' in config. Available: {list(AVAILABLE_DISORDER_FUNCTIONS.keys())}")
+        import sys;
+
+        sys.exit(1)
+    selected_disorder_func = AVAILABLE_DISORDER_FUNCTIONS[disorder_type]
+
+    if use_ctrw:
+        if not (0 < ctrw_alpha < 1):
+            print("Error: CTRW alpha must be between 0 and 1.")
+            import sys;
+
+            sys.exit(1)
+        disorder_params['ctrw_alpha'] = ctrw_alpha
+
+    # Animation Params
+    anim_config = config.get('animation', {})
+    run_animation = anim_config.get('enabled', False)  # Use this variable 'run_animation'
+    save_animation = anim_config.get('save', False)
+    anim_steps = anim_config.get('steps', 500)  # Use this variable 'anim_steps'
+    anim_walker = anim_config.get('walker_index', 0)  # Use this variable 'anim_walker'
+    anim_filename = anim_config.get('filename', 'walk_animation.gif')  # Use this variable 'anim_filename'
+
+    # Histogram Params
+    hist_config = config.get('histograms', {})
+    run_histograms = hist_config.get('enabled', False)  # Use this variable 'run_histograms'
+    hist_steps_to_plot = hist_config.get('steps_to_plot', [])  # Use 'hist_steps_to_plot'
+
+    # --- Print Loaded Configuration Summary ---
+    # (This part correctly uses the local variables)
+    print("\n--- Simulation Configuration ---")
+    print(f"  Steps: {steps}, Walkers: {walkers}, Trials: {trials}")
+    print(f"  dt: {dt}, Step Size: {step_size}")
+    print(f"  Grid: {grid_size}x{grid_size} from {grid_min} to {grid_max}")
+    print(f"  Boundaries: PBC={use_pbc}, CheckBounds={check_bounds}")
+    print(f"  Disorder: Type='{disorder_type}', Params={disorder_params}")
+    print(f"  CTRW: Enabled={use_ctrw}, Alpha={ctrw_alpha if use_ctrw else 'N/A'}")
+    print(f"  Animation: Run={run_animation}, Save={save_animation}")
+    print(f"  Histograms: Run={run_histograms}, Steps={hist_steps_to_plot}")
+    print("-" * 30)
+
+    # --- Setup Grid ---
+    print(f"Setting up grid ({grid_size}x{grid_size})...")
+    XV, YV = np.meshgrid(np.linspace(grid_min, grid_max, grid_size),
+                         np.linspace(grid_min, grid_max, grid_size))
+    print("Grid setup done.")
+
+    # --- Run Parallel Simulation ---
+    print(f"\n--- Running Parallel Simulation ({trials} Trials) ---")
+    # *** Use local variables loaded from config, NOT args.***
     avg_msd, time_axis = main_parallel(
-        num_trials_total=args.trials,
-        num_steps=args.steps,
-        num_walkers=args.walkers,
-        step=args.step_size,
-        dt=args.dt,
-        disorder_function=selected_disorder_func,  # Pass the selected function object
-        disorder_params=disorder_params,  # Pass the constructed params
+        num_trials_total=trials,  # Use 'trials' variable
+        num_steps=steps,  # Use 'steps' variable
+        num_walkers=walkers,  # Use 'walkers' variable
+        step=step_size,  # Use 'step_size' variable
+        dt=dt,  # Use 'dt' variable
+        disorder_function=selected_disorder_func,
+        disorder_params=disorder_params,
         xv=XV,
         yv=YV,
-        use_ctrw_flag=args.ctrw,
-        use_pbc_flag = args.pbc,  # Pass PBC flag
-        check_bounds_flag = args.check_bounds  # Pass bounds check flag
+        use_ctrw_flag=use_ctrw,  # Use 'use_ctrw' variable
+        use_pbc_flag=use_pbc,  # Use 'use_pbc' variable
+        check_bounds_flag=check_bounds  # Use 'check_bounds' variable
     )
 
-    # --- Quantitative Analysis ---
     # --- Quantitative Analysis ---
     if avg_msd is not None and time_axis is not None:
         print("\n" + "=" * 30)
@@ -1270,8 +1381,8 @@ if __name__ == "__main__":
         print("=" * 30)
 
         # Define fit range (e.g., last half of the data, avoiding first few points)
-        min_fit_step = max(10, args.steps // 2)  # Start fit from step 10 or halfway, whichever is later
-        max_fit_step = args.steps
+        min_fit_step = max(10, steps // 2)  # Start fit from step 10 or halfway, whichever is later
+        max_fit_step = steps
         print(f"Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")  # Print range once
 
         # Initialize fit results to NaN
@@ -1362,10 +1473,10 @@ if __name__ == "__main__":
 
         # --- 4. Theoretical Comparison (for ordered case) ---
         # Calculate theoretical D for the standard ordered walk
-        D_theory_ordered = args.step_size ** 2 / (4 * args.dt)
+        D_theory_ordered = step_size ** 2 / (4 * dt)
         print("\n--- Theoretical Comparison ---")
         print(f"  Theoretical D (Ordered Walk) = {D_theory_ordered:.4e}")
-        if args.disorder == 'none' and not args.ctrw:
+        if disorder_type == 'none' and not use_ctrw:
             print(f"  (Simulation matches theoretical D if Avg D_eff -> Theoretical D)")
         else:
             print(f"  (Disorder/CTRW expected to reduce D_eff compared to theoretical)")
@@ -1379,22 +1490,22 @@ if __name__ == "__main__":
         valid_div = time_axis > 1e-15
         if np.any(valid_div):
             msd_over_time = avg_msd[valid_div] / time_axis[valid_div]
-            plt.plot(time_axis[valid_div], msd_over_time, label=f'MSD/Time ({args.disorder})')
+            plt.plot(time_axis[valid_div], msd_over_time, label=f'MSD/Time ({disorder_type})')
             # Add horizontal line for theoretical D*4 (only makes sense for normal diffusion)
             plt.axhline(4 * D_theory_ordered, color='r', linestyle='--', alpha=0.7,
                         label=f'4 * D_theory (Ordered) = {4 * D_theory_ordered:.2e}')
         plt.xlabel('Time (s)')
         plt.ylabel('MSD / Time')
-        plt.title(f'Avg Effective Diffusion Coefficient ({args.trials} Trials)')
-        plt.grid(True);
-        plt.legend();
+        plt.title(f'Avg Effective Diffusion Coefficient ({trials} Trials)')
+        plt.grid(True)
+        plt.legend()
         plt.show()
 
         # Plot Log-Log MSD
         plt.figure(figsize=(10, 6))
         valid_log = (time_axis > 1e-15) & (avg_msd > 1e-15)
         if np.any(valid_log):
-            plt.loglog(time_axis[valid_log], avg_msd[valid_log], label=f'MSD ({args.disorder})')
+            plt.loglog(time_axis[valid_log], avg_msd[valid_log], label=f'MSD ({disorder_type})')
             # Plot theoretical line
             slope_1_line = 4 * D_theory_ordered * time_axis[valid_log]
             plt.loglog(time_axis[valid_log], slope_1_line, 'r--', alpha=0.7,
@@ -1408,144 +1519,64 @@ if __name__ == "__main__":
 
         plt.xlabel('Time (s)')
         plt.ylabel('MSD')
-        plt.title(f'Avg Mean Squared Displacement (Log-Log, {args.trials} Trials)')
+        plt.title(f'Avg Mean Squared Displacement (Log-Log, {trials} Trials)')
         plt.grid(True, which='both');
-        plt.legend();
+        plt.legend()
         plt.show()
 
     else:
         print("Parallel simulation failed or produced no results, skipping analysis and plotting.")
 
-        # --- Optional: Run Single Trial for Animation ---
-    if args.animate:
+    # --- Optional: Run Single Trial for Animation ---
+    # *** Use local variables loaded from config ***
+    if run_animation:
         print("\n--- Running Single Trial for Animation ---")
-        # Setup grid for animation (can be same or different)
-        XV_anim, YV_anim = np.meshgrid(np.linspace(-1, 1, args.grid_size),np.linspace(-1, 1, args.grid_size))  # Use grid_size for consistency
-
-        # Instantiate RandomWalk with store_history=True
-        # Make sure RandomWalk class definition exists above
-        try:
-            rw_anim = RandomWalk(
-                num_steps=args.anim_steps,
-                num_walkers=args.walkers,  # Use same number of walkers
-                step=args.step_size,
-                dt=args.dt,
-                xv=XV_anim,
-                yv=YV_anim,
-                disorder_function=selected_disorder_func,  # Use same selected function
-                disorder_params=disorder_params,  # Use same constructed params
-                use_ctrw=args.ctrw,
-                store_history=True,
-                use_pbc=args.pbc,  # Pass flag
-                check_bounds=args.check_bounds,
-                # <<< Enable history storage
-            )
-        except NameError:
-            print("ERROR: RandomWalk class not defined before animation block.")
-            # Handle error appropriately, maybe exit
-            import sys
-
-            sys.exit(1)
-        except Exception as e:
-            print(f"ERROR: Failed to initialize RandomWalk for animation: {e}")
-            import sys
-
-            sys.exit(1)
-
-        # Determine if disorder is used for this specific run
+        rw_anim = RandomWalk(
+            num_steps=anim_steps,  # Use 'anim_steps'
+            num_walkers=walkers,
+            step=step_size, dt=dt, xv=XV, yv=YV,
+            disorder_function=selected_disorder_func,
+            disorder_params=disorder_params,
+            use_ctrw=use_ctrw,
+            use_pbc=use_pbc,
+            check_bounds=check_bounds,
+            store_history=True
+        )
         use_disorder_anim = (selected_disorder_func is not None)
-
-        # Run the trajectories method
-        print(f"Running animation trajectory ({args.anim_steps} steps)...")
         rw_anim.trajectories(use_disorder=use_disorder_anim)
+        rw_anim.animate_trajectory(
+            walker_index=anim_walker,  # Use 'anim_walker'
+            save_animation=save_animation,  # Use 'save_animation'
+            filename=anim_filename  # Use 'anim_filename'
+        )
 
-        # Generate animation
-        print("Generating/Showing animation...")
-        # Make sure animate_trajectory method exists in RandomWalk class
-        try:
-            rw_anim.animate_trajectory(
-                walker_index=args.anim_walker,
-                interval=50,  # Example interval
-                save_animation=args.save_anim,  # <<< Use the flag value here
-                filename=args.anim_file
-            )
-            if args.save_anim:  # Optional: Print message only if saving attempt was made
-                # Note: animate_trajectory should print success/failure messages
-                print(f"Animation saving process initiated for {args.anim_file}")
-            else:
-                print("Animation displayed interactively.")
 
-        except AttributeError:
-            print("ERROR: animate_trajectory method not found in RandomWalk class.")
-        except Exception as e:
-            print(f"ERROR: Failed during animation generation/display: {e}")
-
-        # --- Optional: Run Single Trial for Histograms ---
-    if args.histograms and args.hist_steps:
+    # --- Optional: Run Single Trial for Histograms ---
+    # *** Use local variables loaded from config ***
+    if run_histograms and hist_steps_to_plot:
         print("\n--- Running Single Trial for Histograms ---")
-        # Determine the maximum step needed for histograms
-        max_hist_step = max(args.hist_steps)
-        # Ensure the simulation runs long enough for the latest histogram
-        hist_run_steps = max(args.steps, max_hist_step)  # Use main steps or max hist step, whichever is longer
-        print(f"Running simulation up to step {hist_run_steps} to generate requested histograms.")
-
-        # Setup grid for histogram run (can be same or different)
-        XV_hist, YV_hist = np.meshgrid(np.linspace(-1, 1, args.grid_size), np.linspace(-1, 1, args.grid_size))
-
-        # Instantiate RandomWalk with store_history=True
-        try:
-            rw_hist = RandomWalk(
-                num_steps=hist_run_steps,  # Run enough steps
-                num_walkers=args.walkers,
-                step=args.step_size,
-                dt=args.dt,
-                xv=XV_hist,
-                yv=YV_hist,
-                disorder_function=selected_disorder_func,
-                disorder_params=disorder_params,
-                use_ctrw=args.ctrw,
-                store_history=True,# <<< MUST store history
-                use_pbc=args.pbc,           # Pass flag
-                check_bounds=args.check_bounds,
-            )
-        except NameError:
-            print("ERROR: RandomWalk class not defined before histogram block.")
-            import sys;
-
-            sys.exit(1)
-        except Exception as e:
-            print(f"ERROR: Failed to initialize RandomWalk for histograms: {e}")
-            import sys;
-
-            sys.exit(1)
-
-        # Determine if disorder is used
+        max_hist_step = max(hist_steps_to_plot) if hist_steps_to_plot else 0
+        # Ensure simulation runs long enough for both main analysis AND histograms
+        hist_run_steps = max(steps, max_hist_step)
+        rw_hist = RandomWalk(
+            num_steps=hist_run_steps,
+            num_walkers=walkers, step=step_size, dt=dt, xv=XV, yv=YV,
+            disorder_function=selected_disorder_func,
+            disorder_params=disorder_params,
+            use_ctrw=use_ctrw, use_pbc=use_pbc, check_bounds=check_bounds,
+            store_history=True
+        )
         use_disorder_hist = (selected_disorder_func is not None)
-
-        # Run the trajectories method
-        print(f"Running histogram trajectory ({hist_run_steps} steps)...")
         rw_hist.trajectories(use_disorder=use_disorder_hist)
-
-        # Generate histograms
         print("Generating Histograms...")
-        # Make sure plot_position_histograms method exists
-        try:
-            for step_to_plot in args.hist_steps:
-                if step_to_plot <= hist_run_steps:
-                    print(f"  Plotting histogram for step {step_to_plot}...")
-                    # Ensure the method exists and handles potential errors
-                    rw_hist.plot_position_histograms(time_step=step_to_plot)
-                else:
-                    # This case shouldn't happen due to hist_run_steps calculation, but good practice
-                    print(
-                        f"  Warning: Requested histogram step {step_to_plot} exceeds simulation length ({hist_run_steps}). Skipping.")
-            # Ensure plots are displayed if running interactively
-            plt.show()  # Add this if plots don't show automatically
-        except AttributeError:
-            print("ERROR: plot_position_histograms method not found in RandomWalk class.")
-        except Exception as e:
-            print(f"ERROR: Failed during histogram generation: {e}")
+        for step_to_plot in hist_steps_to_plot:  # Use 'hist_steps_to_plot'
+            if step_to_plot <= hist_run_steps:
+                rw_hist.plot_position_histograms(time_step=step_to_plot)
+            else:
+                print(f"Warning: Requested hist step {step_to_plot} > sim length {hist_run_steps}")
+        plt.show()
 
     print("\nSimulation Finished.")
+
 
 
