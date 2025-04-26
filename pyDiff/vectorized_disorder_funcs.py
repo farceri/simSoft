@@ -344,3 +344,52 @@ def corrected_gaussian_rest_prob_vectorized(x, y, sigma=1.0, max_rest_strength=0
 
     return probs
 
+
+
+
+
+#---FUNCTIONS TO COMPUTE AN ALPHA COEFFICIENT THAT DEPENDS ON THE POSITION---
+
+
+def constant_alpha(x, y, value=0.7, **kwargs):
+    """ Returns a constant alpha value across the grid. """
+    # Ensure alpha is within valid CTRW range (0 < alpha < 1)
+    alpha_clipped = np.clip(value, 0.01, 0.99) # Avoid exact 0 or 1
+    return np.full(x.shape, alpha_clipped, dtype=np.float32)
+
+def gaussian_alpha(x, y, center_alpha=0.5, edge_alpha=0.9, sigma=0.5, **kwargs):
+    """
+    Alpha varies radially based on a Gaussian profile.
+    Lower alpha (longer waits) near the center.
+    Higher alpha (shorter waits) further away.
+    """
+    distance_sq = x**2 + y**2
+    # Gaussian weight (1 at center, decays towards 0)
+    weight_center = np.exp(-distance_sq / (2 * sigma**2))
+    # Linear interpolation between center and edge alpha based on weight
+    alpha = weight_center * center_alpha + (1 - weight_center) * edge_alpha
+    # Ensure alpha is within valid CTRW range (0 < alpha < 1)
+    return np.clip(alpha, 0.01, 0.99).astype(np.float32)
+
+def linear_gradient_alpha(x, y, min_alpha=0.3, max_alpha=0.9, direction='x', **kwargs):
+    """ Alpha varies linearly along a specified direction. """
+    if direction == 'x':
+        coord = x
+        min_coord = np.min(x)
+        max_coord = np.max(x)
+    elif direction == 'y':
+        coord = y
+        min_coord = np.min(y)
+        max_coord = np.max(y)
+    else:
+        raise ValueError("Direction must be 'x' or 'y'")
+
+    if max_coord <= min_coord: # Avoid division by zero if grid is flat
+        return np.full(x.shape, (min_alpha + max_alpha) / 2, dtype=np.float32)
+
+    # Normalize coordinate to range [0, 1]
+    normalized_coord = (coord - min_coord) / (max_coord - min_coord)
+    # Interpolate alpha
+    alpha = min_alpha + normalized_coord * (max_alpha - min_alpha)
+    # Ensure alpha is within valid CTRW range (0 < alpha < 1)
+    return np.clip(alpha, 0.01, 0.99).astype(np.float32)

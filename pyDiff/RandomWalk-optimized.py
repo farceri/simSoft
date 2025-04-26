@@ -68,9 +68,19 @@ TODO:
 '''
 @numba.njit(cache=True)
 def draw_power_law_wait_time(alpha):
-    v = 1.0 - np.random.rand()
+    """ Draws wait time from tau^-(1+alpha). alpha MUST be > 0. """
+    # Add check for safety, although clipping should prevent alpha=0
+    if alpha <= 0:
+         # Return minimum wait time if alpha is invalid
+         # Or handle differently (e.g., raise error if Numba supported it well here)
+         return np.int64(1)
+    v = 1.0 - np.random.rand() # Random number in (0, 1]
+    # Calculate wait steps: (1-v)^(-1/alpha) is equivalent for uniform v in [0,1)
+    # Using ceil ensures wait_steps >= 1
     wait_steps = np.int64(np.ceil(v**(-1.0 / alpha)))
-    return max(np.int64(1), wait_steps)
+    # Numba might warn about potential division by zero if alpha could be 0
+    # Clipping alpha beforehand is important.
+    return max(np.int64(1), wait_steps) # Ensure minimum wait is 1 step
 
 @numba.njit(cache=True, fastmath=True) # Consider Numba for this too
 def random_walk_ordered_numba(positions, step_size, num_walkers):
@@ -141,98 +151,56 @@ def _run_ctrw_disordered_step_numba(
     positions,           # Input: Current (x,y) for all walkers
     wait_times,          # Input/Output: Steps remaining to wait for each walker
     step_size,           # Input: How far a walker moves if it moves
-    precomputed_probs,   # Input: The table of probabilities for each grid site
-    x_min_grid, y_min_grid, dx, dy, nx, ny, # Input: Grid info for indexing
-    alpha                # Input: CTRW exponent for power-law waits
+    precomputed_probs,   # Input: The table of probabilities for each grid site (ny, nx, 5)
+    alpha_grid,          # <<< INPUT: Grid of alpha values (ny, nx) >>>
+    x_min_grid, y_min_grid, dx, dy, nx, ny # Input: Grid info for indexing
     ):
-    """ Numba kernel for one CTRW step with power-law waits. """
-
-    num_walkers = positions.shape[0] # How many walkers are there?
-
-    # Initialize array to store the step [dx, dy] taken by each walker IN THIS TIMESTEP.
-    # If a walker waits or fails to move, its step remains [0, 0].
+    """ Numba kernel for one CTRW step with position-dependent power-law waits. """
+    num_walkers = positions.shape[0]
     steps = np.zeros_like(positions)
 
-    # IMPORTANT: The 'wait_times' array passed in will be modified directly by this function.
-
-    # Loop through each walker individually
     for i in range(num_walkers):
-
-        # --- 1. Check if the walker is currently waiting ---
         if wait_times[i] > 0:
-            # If wait_times[i] is greater than 0, this walker was previously told
-            # to wait and still has time left on its counter.
-            wait_times[i] -= 1 # Decrement the remaining wait time by 1 step.
-            # The walker does nothing else this step; its step remains [0, 0].
-
-        # --- 2. If the walker is NOT waiting ---
+            wait_times[i] -= 1
         else:
-            # wait_times[i] is 0, so the walker is free to act.
-            # It will either attempt to move or decide to start a new rest period.
-
-            # --- 2a. Find where the walker is on the grid ---
             current_x = positions[i, 0]
             current_y = positions[i, 1]
-            # Get the grid indices (y_idx, x_idx) corresponding to the position.
             y_idx, x_idx = _calculate_grid_index_fast_numba(
                 current_x, current_y, x_min_grid, y_min_grid, dx, dy, nx, ny)
 
-            # --- 2b. Look up the probabilities for that grid site ---
-            # Retrieve the 5 probabilities [p+x, p-x, p+y, p-y, p_rest]
-            # from the precomputed table for this specific grid location.
             probabilities = precomputed_probs[y_idx, x_idx, :]
-            rest_prob = probabilities[4] # Extract the resting probability
+            rest_prob = probabilities[4]
 
-            # --- 2c. Decide: Rest or Move? ---
-            # Generate a random float between 0.0 and 1.0
             if np.random.rand() < rest_prob:
                 # --- Walker CHOOSES TO REST ---
-                # Draw a waiting time 'tau' (integer >= 1) from the power-law distribution
-                tau = draw_power_law_wait_time(alpha)
-                # Set the walker's wait counter. The total wait is 'tau' steps.
-                # Since this current step is the first step of waiting, the
-                # REMAINING wait time to set on the counter is tau - 1.
-                # Ensure it's not negative if tau happened to be 1.
-                wait_times[i] = max(np.int64(0), tau - 1)
-                # Walker doesn't move this step, steps[i,:] remains [0, 0].
+                # <<< Look up local alpha value from the grid >>>
+                local_alpha = alpha_grid[y_idx, x_idx]
 
+                # <<< Draw wait time using the local alpha >>>
+                tau = draw_power_law_wait_time(local_alpha)
+
+                wait_times[i] = max(np.int64(0), tau - 1)
             else:
                 # --- Walker CHOOSES TO MOVE ---
-                # Get the probabilities for the 4 move directions
                 direction_probs = probabilities[:4]
-                direction_probs_sum = np.sum(direction_probs) # Should equal 1.0 - rest_prob
-
-                # Check if movement is actually possible (i.e., rest_prob wasn't 1.0)
-                if direction_probs_sum > 1e-9: # Use tolerance for float comparison
-                    # Choose a direction based on the relative probabilities p(+x), p(-x), p(+y), p(-y)
-                    # This implements np.random.choice(4, p=normalized_probs) efficiently for Numba:
-                    choice_rand = np.random.rand() * direction_probs_sum # Random number scaled to total move prob
+                direction_probs_sum = np.sum(direction_probs)
+                if direction_probs_sum > 1e-9:
+                    choice_rand = np.random.rand() * direction_probs_sum
                     p_plus_x  = direction_probs[0]
                     p_minus_x = direction_probs[1]
                     p_plus_y  = direction_probs[2]
 
-                    # Check cumulatively which direction bin the random number falls into
-                    if choice_rand < p_plus_x:
-                        direction_choice = 0 # +x
-                    elif choice_rand < (p_plus_x + p_minus_x):
-                        direction_choice = 1 # -x
-                    elif choice_rand < (p_plus_x + p_minus_x + p_plus_y):
-                        direction_choice = 2 # +y
-                    else:
-                        direction_choice = 3 # -y
+                    if choice_rand < p_plus_x: direction_choice = 0
+                    elif choice_rand < (p_plus_x + p_minus_x): direction_choice = 1
+                    elif choice_rand < (p_plus_x + p_minus_x + p_plus_y): direction_choice = 2
+                    else: direction_choice = 3
 
-                    # Assign the actual step [dx, dy] based on the chosen direction
                     if direction_choice == 0: steps[i, 0] = step_size
                     elif direction_choice == 1: steps[i, 0] = -step_size
                     elif direction_choice == 2: steps[i, 1] = step_size
                     elif direction_choice == 3: steps[i, 1] = -step_size
+                # else: Cannot move if rest_prob is 1.0
 
-                # If direction_probs_sum was ~0 (rest_prob was ~1), the walker cannot move.
-                # steps[i,:] remains [0, 0].
-                # In either move case (moved or couldn't move because rest_prob=1),
-                # the wait_times[i] remains 0 because the walker didn't *choose* to rest.
-
-    # After looping through all walkers, return the array of steps taken in this dt
     return steps
 
 
@@ -278,7 +246,7 @@ def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, n
 
 
 class RandomWalk:
-    def __init__(self,use_pbc=False, check_bounds=False, interpolation=False,store_history=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
+    def __init__(self,use_pbc=False, alpha_function=None, alpha_params=None,check_bounds=False, interpolation=False,store_history=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
                  xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
                  yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95},use_ctrw=False):
         self.num_walkers = num_walkers
@@ -339,9 +307,22 @@ class RandomWalk:
 
         # --- CTRW State ---
         self.wait_times = np.zeros(self.num_walkers, dtype=np.int64)  # Initialize always
-        self.ctrw_alpha = self.disorder_params.get('ctrw_alpha', None)
-        if self.use_ctrw and (self.ctrw_alpha is None or not (0 < self.ctrw_alpha < 1)):
-            raise ValueError("CTRW enabled but 'ctrw_alpha' is missing or invalid.")
+        self.alpha_function = alpha_function  # Store function object
+        self.alpha_params = alpha_params if alpha_params is not None else {}
+        self.alpha_grid = None  # Initialize
+        if self.use_ctrw:
+            print("CTRW enabled. Precomputing alpha grid...")
+            try:
+                self._precompute_alpha_grid()  # Call the new method
+                if self.alpha_grid is None:
+                    # This happens if alpha_function is None or precomputation fails
+                    raise ValueError("Alpha grid precomputation failed or no alpha function provided for CTRW.")
+                print(f"Alpha grid precomputation finished using {getattr(self.alpha_function, '__name__', 'N/A')}.")
+            except Exception as e:
+                print(f"***** ERROR during alpha grid precomputation: {e} *****")
+                import traceback
+                traceback.print_exc()
+                raise  # Re-raise error to stop simulation if alpha grid is needed but failed
 
         # --- Precomputation ---
         self.precomputed_probs = None
@@ -365,6 +346,50 @@ class RandomWalk:
         if self.use_pbc and self.perform_bounds_check:
             print("Warning: Both PBC and bounds checking enabled. Bounds check may trigger before PBC wraps.")
         self.out_of_bounds_walkers = set()
+
+    def _precompute_alpha_grid(self):
+        """ Calls the vectorized self.alpha_function to precompute alpha grid. """
+        if not callable(self.alpha_function):
+            print("Warning: No valid alpha function provided for CTRW alpha grid precomputation.")
+            self.alpha_grid = None
+            return
+
+        print(f"  Attempting alpha precomputation with {self.alpha_function.__name__}...")
+        print(f"  Alpha params: {self.alpha_params}")
+
+        try:
+            # Call the assigned alpha function (which must be vectorized)
+            result_alpha = self.alpha_function(
+                self.xv, self.yv, **self.alpha_params
+            )
+            # Basic validation
+            if not isinstance(result_alpha, np.ndarray):
+                raise TypeError("Alpha function did not return a NumPy array.")
+            if result_alpha.shape != (self.ny, self.nx):
+                raise ValueError(f"Alpha grid shape mismatch: {result_alpha.shape}. Expected {(self.ny, self.nx)}")
+            if np.isnan(result_alpha).any() or np.isinf(result_alpha).any():
+                print("Warning: NaNs or Infs detected in precomputed alpha grid!")
+            # Check if values are reasonable (e.g., mostly between 0 and 1)
+            if np.any(result_alpha <= 0) or np.any(result_alpha >= 1):
+                print(
+                    "Warning: Alpha grid contains values outside typical (0, 1) range after function call (clipping applied).")
+
+            # Ensure correct dtype (e.g., float32 for consistency with Numba)
+            self.alpha_grid = result_alpha.astype(np.float32)
+            print(
+                f"  Alpha grid type conversion successful. Shape: {self.alpha_grid.shape}, dtype: {self.alpha_grid.dtype}")
+
+        except Exception as e:
+            print(f"***** ERROR during alpha precomputation: {e} *****")
+            import traceback
+            traceback.print_exc()
+            self.alpha_grid = None  # Ensure it's None if failed
+
+
+
+
+
+
 
     def _precompute_probabilities(self):
         """
@@ -494,45 +519,41 @@ class RandomWalk:
 
     # --- Modified random_walk_disordered Method ---
     def random_walk_disordered(self):
-        """
-        Performs one step of disordered walk. Uses standard or CTRW kernel
-        based on self.use_ctrw flag. Modifies positions and potentially wait_times.
-        """
+        """ Performs one step of disordered walk. Uses standard or CTRW kernel. """
+        if self.precomputed_probs is None and self.disorder_function != self._default_disorder_function:
+             # Allow running if default function (no precomp needed) or if precomp succeeded
+             raise ValueError("Precomputed probabilities needed but not available.")
         if not self.is_uniform_grid:
-            raise NotImplementedError("Optimized kernels require uniform grid.")
-        if self.precomputed_probs is None:
-            raise ValueError("Precomputed probabilities needed but not available.")
+             raise NotImplementedError("Optimized kernels require uniform grid.")
 
-        """
-        # --- Add Debug Prints ---
-        print(f"DEBUG: Inside random_walk_disordered")
-        print(f"DEBUG: self.precomputed_probs is None? {self.precomputed_probs is None}")
-        print(f"DEBUG: self.disorder_function: {repr(self.disorder_function)}")
-        print(f"DEBUG: self._default_disorder_function: {repr(self._default_disorder_function)}")
-        print(
-            f"DEBUG: self.disorder_function != self._default_disorder_function? {self.disorder_function != self._default_disorder_function}")
-        # -----------------------
-        """
         if self.use_ctrw:
-            # --- Call CTRW Numba kernel ---
+            # --- Check if alpha grid is ready for CTRW ---
+            if self.alpha_grid is None:
+                raise ValueError("CTRW is enabled, but the spatial alpha grid is missing or invalid.")
+
+            # --- Call CTRW Numba kernel, passing alpha_grid ---
             calculated_steps = _run_ctrw_disordered_step_numba(
                 self.positions, self.wait_times, self.step, self.precomputed_probs,
-                self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny,
-                self.ctrw_alpha
+                self.alpha_grid, # <<< Pass the precomputed alpha grid >>>
+                self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
             )
-            # wait_times are modified in-place by the kernel
         else:
             # --- Call Standard Numba kernel ---
+            # Make sure precomputed_probs exists if a non-default disorder func was used
+            if self.precomputed_probs is None and self.disorder_function != self._default_disorder_function:
+                 # This case might occur if only CTRW was enabled but disorder was 'none'
+                 # We need probabilities even for standard walk if disorder != none
+                 # However, the check at the start should cover this.
+                 # If disorder is 'none', we should be calling random_walk_ordered instead via trajectories()
+                 raise ValueError("Standard disordered walk called without precomputed probabilities.")
+
             calculated_steps = _run_standard_disordered_step_numba(
                 self.positions, self.step, self.precomputed_probs,
                 self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
             )
 
-        # Update positions using the steps returned by the chosen kernel
+        # Update positions
         self.positions += calculated_steps
-
-        # Apply PBC if needed
-        # self.apply_pbc()
 
     # --------------------------------------------
 
@@ -1051,7 +1072,7 @@ def run_single_trial(params):
 
         # Corrected unpacking order:
         trial_index, num_steps, num_walkers, step, dt, \
-        disorder_function_param, disorder_params, xv, yv, \
+        disorder_function_param, disorder_params,alpha_function_param, alpha_params_param, xv, yv, \
         use_pbc_flag, check_bounds_flag, use_ctrw_flag, seed = params # Corrected order here!
 
         np.random.seed(seed)
@@ -1070,6 +1091,8 @@ def run_single_trial(params):
             disorder_function=disorder_function_param,
             disorder_params=disorder_params,
             use_ctrw=use_ctrw_flag,
+            alpha_function=alpha_function_param,  # Pass alpha function
+            alpha_params=alpha_params_param,  # Pass alpha params
             use_pbc=use_pbc_flag,
             check_bounds=check_bounds_flag
             # Add store_history if needed for animation/histograms
@@ -1097,7 +1120,7 @@ def run_single_trial(params):
 
 # --- main_parallel function (Modified task_args creation) ---
 def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
-                  disorder_function, disorder_params, xv, yv, use_pbc_flag, check_bounds_flag,use_ctrw_flag): # Added use_ctrw_flag
+                  disorder_function, disorder_params,alpha_function,alpha_params, xv, yv, use_pbc_flag, check_bounds_flag,use_ctrw_flag): # Added use_ctrw_flag
     # ... (timer start, get num_workers) ...
     start_time = timer.time(); num_workers = os.cpu_count(); print(f"Detected {num_workers} cores.")
 
@@ -1107,7 +1130,7 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
         unique_seed = base_seed + i
         task_args.append( # Ensure all needed args are included in the correct order
             (i, num_steps, num_walkers, step, dt,
-             disorder_function, disorder_params, xv, yv, use_pbc_flag, check_bounds_flag, use_ctrw_flag, unique_seed) # Added flag
+             disorder_function, disorder_params,alpha_function,alpha_params, xv, yv, use_pbc_flag, check_bounds_flag, use_ctrw_flag, unique_seed) # Added flag
         )
 
     print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes (CTRW Mode: {use_ctrw_flag})...")
@@ -1139,7 +1162,10 @@ from vectorized_disorder_funcs import (
     plateau_rest_prob_vectorized,
     multi_center_rest_prob_vectorized,
     exponential_rest_prob_vectorized,
-    boundary_dependent_rest_prob_vectorized
+    boundary_dependent_rest_prob_vectorized,
+    constant_alpha,
+    gaussian_alpha,
+    linear_gradient_alpha
 )
 # Use the VECTORIZED versions suitable for precomputation
 AVAILABLE_DISORDER_FUNCTIONS = {
@@ -1152,6 +1178,19 @@ AVAILABLE_DISORDER_FUNCTIONS = {
     "boundary": boundary_dependent_rest_prob_vectorized,
     "fixed_rest": my_spatial_disorder_vectorized, # Example name for the fixed rest one
 }
+
+AVAILABLE_ALPHA_FUNCTIONS = {
+    "constant": constant_alpha,
+    "gaussian": gaussian_alpha,
+    "linear_gradient": linear_gradient_alpha,
+    # Add keys matching your alpha function names
+}
+
+
+
+
+
+
 if __name__ == "__main__":
 
     '''
@@ -1315,10 +1354,25 @@ if __name__ == "__main__":
     use_pbc = boundary_params.get('pbc', False)  # Use this variable 'use_pbc'
     check_bounds = boundary_params.get('check_bounds', False) if not use_pbc else False  # Use 'check_bounds'
 
-    # CTRW Params
-    ctrw_params = config.get('ctrw', {})
-    use_ctrw = ctrw_params.get('enabled', False)  # Use this variable 'use_ctrw'
-    ctrw_alpha = ctrw_params.get('alpha', 0.7)
+
+    # CTRW and Alpha Params
+    ctrw_config = config.get('ctrw', {})
+    use_ctrw = ctrw_config.get('enabled', False)
+    selected_alpha_func = None
+    alpha_params = {}
+    if use_ctrw:
+        alpha_config_section = ctrw_config.get('alpha_config', {})
+        alpha_type = alpha_config_section.get('type', 'constant')  # Default to constant if unspecified
+        alpha_params = alpha_config_section.get('params', {})
+        if alpha_type not in AVAILABLE_ALPHA_FUNCTIONS:
+            print(
+                f"Error: Unknown alpha function type '{alpha_type}'. Available: {list(AVAILABLE_ALPHA_FUNCTIONS.keys())}")
+            import sys;
+
+            sys.exit(1)
+        selected_alpha_func = AVAILABLE_ALPHA_FUNCTIONS[alpha_type]
+        # Note: We don't add 'ctrw_alpha' to disorder_params anymore,
+        # it's handled by the selected_alpha_func and alpha_params
 
     # Disorder Params
     disorder_config = config.get('disorder', {})
@@ -1332,13 +1386,6 @@ if __name__ == "__main__":
         sys.exit(1)
     selected_disorder_func = AVAILABLE_DISORDER_FUNCTIONS[disorder_type]
 
-    if use_ctrw:
-        if not (0 < ctrw_alpha < 1):
-            print("Error: CTRW alpha must be between 0 and 1.")
-            import sys;
-
-            sys.exit(1)
-        disorder_params['ctrw_alpha'] = ctrw_alpha
 
     # Animation Params
     anim_config = config.get('animation', {})
@@ -1361,7 +1408,10 @@ if __name__ == "__main__":
     print(f"  Grid: {grid_size}x{grid_size} from {grid_min} to {grid_max}")
     print(f"  Boundaries: PBC={use_pbc}, CheckBounds={check_bounds}")
     print(f"  Disorder: Type='{disorder_type}', Params={disorder_params}")
-    print(f"  CTRW: Enabled={use_ctrw}, Alpha={ctrw_alpha if use_ctrw else 'N/A'}")
+    print(f"  CTRW: Enabled={use_ctrw}")
+    if use_ctrw:
+        print(f"    Alpha Function: Type='{alpha_type}', Params={alpha_params}")
+    print("-" * 30)
     print(f"  Animation: Run={run_animation}, Save={save_animation}")
     print(f"  Histograms: Run={run_histograms}, Steps={hist_steps_to_plot}")
     print("-" * 30)
@@ -1383,6 +1433,8 @@ if __name__ == "__main__":
         dt=dt,  # Use 'dt' variable
         disorder_function=selected_disorder_func,
         disorder_params=disorder_params,
+        alpha_function=selected_alpha_func,
+        alpha_params=alpha_params,
         xv=XV,
         yv=YV,
         use_ctrw_flag=use_ctrw,  # Use 'use_ctrw' variable
@@ -1397,7 +1449,7 @@ if __name__ == "__main__":
         print("=" * 30)
 
         # Define fit range (e.g., last half of the data, avoiding first few points)
-        min_fit_step = max(10, steps // 2)  # Start fit from step 10 or halfway, whichever is later
+        min_fit_step = max(10, steps // 3)  # Start fit from step 10 or halfway, whichever is later
         max_fit_step = steps
         print(f"Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")  # Print range once
 
@@ -1552,7 +1604,7 @@ if __name__ == "__main__":
             num_walkers=walkers,
             step=step_size, dt=dt, xv=XV, yv=YV,
             disorder_function=selected_disorder_func,
-            disorder_params=disorder_params,
+            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,
             use_ctrw=use_ctrw,
             use_pbc=use_pbc,
             check_bounds=check_bounds,
@@ -1578,7 +1630,7 @@ if __name__ == "__main__":
             num_steps=hist_run_steps,
             num_walkers=walkers, step=step_size, dt=dt, xv=XV, yv=YV,
             disorder_function=selected_disorder_func,
-            disorder_params=disorder_params,
+            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,
             use_ctrw=use_ctrw, use_pbc=use_pbc, check_bounds=check_bounds,
             store_history=True
         )
