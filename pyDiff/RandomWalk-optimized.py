@@ -277,7 +277,7 @@ def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, n
 
 
 class RandomWalk:
-    def __init__(self, interpolation=False,store_history=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
+    def __init__(self,use_pbc=False, check_bounds=False, interpolation=False,store_history=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
                  xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
                  yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95},use_ctrw=False):
         self.num_walkers = num_walkers
@@ -358,7 +358,11 @@ class RandomWalk:
         if self.store_history:
             self.all_positions.append(np.copy(self.initial_positions))
 
-
+        # *** Store the boundary condition flags ***
+        self.use_pbc = use_pbc
+        self.perform_bounds_check = check_bounds
+        if self.use_pbc and self.perform_bounds_check:
+            print("Warning: Both PBC and bounds checking enabled. Bounds check may trigger before PBC wraps.")
         self.out_of_bounds_walkers = set()
 
     def _precompute_probabilities(self):
@@ -424,20 +428,19 @@ class RandomWalk:
             else:
                 print("  Final sum check passed.")
 
-
-
-
-
-
-
-
-
-
-
-
     def apply_pbc(self):
-        """Apply periodic boundary conditions to keep particles inside the simulation box."""
-        self.positions = (self.positions + self.box_size / 2) % self.box_size - self.box_size / 2
+        """Apply periodic boundary conditions to keep particles inside the simulation box defined by grid min/max."""
+        # Wrap X coordinates
+        self.positions[:, 0] = self.x_min + (self.positions[:, 0] - self.x_min) % self.box_width
+        # Wrap Y coordinates
+        self.positions[:, 1] = self.y_min + (self.positions[:, 1] - self.y_min) % self.box_height
+        # --- Old version using box_size array (less direct for non-origin centered box) ---
+        # self.positions = (self.positions + self.box_size / 2) % self.box_size - self.box_size / 2 # Assumes origin-centered box?
+        # --- Alternative if box is centered at 0 and goes from -L/2 to L/2 ---
+        # L_x = self.box_width
+        # L_y = self.box_height
+        # self.positions[:, 0] = (self.positions[:, 0] + L_x / 2) % L_x - L_x / 2
+        # self.positions[:, 1] = (self.positions[:, 1] + L_y / 2) % L_y - L_y / 2
 
     def _get_grid_index(self, x, y):
         """
@@ -621,20 +624,17 @@ class RandomWalk:
 
 
     def _check_out_of_bounds(self, positions):
-        """
-        Checks if any walkers are out of the grid and prints a warning.
-
-        Args:
-            positions (numpy.ndarray): A 2D array of walker positions (shape: (num_walkers, 2)).
-        """
+        """ Checks if any walkers are out of the grid and prints a warning. """
+        # Use self.x_min, self.x_max etc defined in __init__
         out_of_bounds = np.where(
             (positions[:, 0] < self.x_min) | (positions[:, 0] > self.x_max) |
             (positions[:, 1] < self.y_min) | (positions[:, 1] > self.y_max)
         )[0]
-        if len(out_of_bounds) > 0:
-            print("Warning: Some walkers are out of bounds!")
-            print("Out-of-bounds walker indices:", out_of_bounds)
-            self.out_of_bounds_walkers.update(out_of_bounds)  # Update the set
+        newly_out = set(out_of_bounds) - self.out_of_bounds_walkers # Find only newly out-of-bounds walkers
+        if newly_out: # Only print warning for newly out walkers
+            print(f"Warning: Walkers went out of bounds at step {self.current_step_num}: {sorted(list(newly_out))}") # Requires tracking step num
+            # print("Out-of-bounds walker indices:", out_of_bounds) # Original print
+            self.out_of_bounds_walkers.update(newly_out) # Update the set
 
 
     # --- trajectories method (ensure wait_times are reset) ---
@@ -644,6 +644,7 @@ class RandomWalk:
 
         self.msd_results = np.zeros(self.num_steps + 1, dtype=np.float64)
         self.msd_results[0] = 0.0
+        self.out_of_bounds_walkers.clear()
 
         if self.store_history and not self.all_positions:  # Ensure initial stored if list was cleared
             self.all_positions = [np.copy(self.initial_positions)]
@@ -652,10 +653,17 @@ class RandomWalk:
         print(
             f"Running trajectories ({'CTRW' if self.use_ctrw and use_disorder else ('Standard Disordered' if use_disorder else 'Ordered')})...")
         for step_num in range(1, self.num_steps + 1):
+            self.current_step_num = step_num
             if use_disorder:
                 self.random_walk_disordered()  # Will use correct kernel based on self.use_ctrw
             else:
                 self.random_walk_ordered()
+
+            # --- Apply Boundary Conditions / Checks ---
+            if self.use_pbc:
+                self.apply_pbc()
+            if self.perform_bounds_check:
+                self._check_out_of_bounds(self.positions)
 
             if self.store_history:
                 self.all_positions.append(np.copy(self.positions))
@@ -668,6 +676,9 @@ class RandomWalk:
         if self.store_history:
             self.all_positions = np.array(self.all_positions)
         print("Simulation finished. MSD calculated.")
+        if self.perform_bounds_check and self.out_of_bounds_walkers:
+            print(f"Total unique walkers that went out of bounds: {len(self.out_of_bounds_walkers)}")
+
     # ---------------------------------------------------------
 
     def animate_trajectory(self, walker_index=0, interval=100, save_animation=False, filename="random_walk.gif"):
@@ -1035,7 +1046,7 @@ def run_single_trial(params):
         # Unpack parameters (ensure order matches task_args creation)
         # Renamed disorder_function to disorder_function_param for clarity
         trial_index, num_steps, num_walkers, step, dt, \
-        disorder_function_param, disorder_params, xv, yv, use_ctrw_flag, seed = params
+        disorder_function_param, disorder_params, xv, yv, use_ctrw_flag,use_pbc_flag,check_bounds_flag, seed = params
 
         np.random.seed(seed)
         print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag})...")
@@ -1044,7 +1055,8 @@ def run_single_trial(params):
         rw = RandomWalk(
             num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
             xv=xv, yv=yv, disorder_function=disorder_function_param, # Pass the param here
-            disorder_params=disorder_params, use_ctrw=use_ctrw_flag
+            disorder_params=disorder_params, use_ctrw=use_ctrw_flag,use_pbc=use_pbc_flag,           # Pass PBC flag
+            check_bounds=check_bounds_flag
         )
 
         # *** CORRECTED LOGIC ***
@@ -1068,7 +1080,7 @@ def run_single_trial(params):
 
 # --- main_parallel function (Modified task_args creation) ---
 def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
-                  disorder_function, disorder_params, xv, yv, use_ctrw_flag): # Added use_ctrw_flag
+                  disorder_function, disorder_params, xv, yv, use_pbc_flag, check_bounds_flag,use_ctrw_flag): # Added use_ctrw_flag
     # ... (timer start, get num_workers) ...
     start_time = timer.time(); num_workers = os.cpu_count(); print(f"Detected {num_workers} cores.")
 
@@ -1078,7 +1090,7 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
         unique_seed = base_seed + i
         task_args.append( # Ensure all needed args are included in the correct order
             (i, num_steps, num_walkers, step, dt,
-             disorder_function, disorder_params, xv, yv, use_ctrw_flag, unique_seed) # Added flag
+             disorder_function, disorder_params, xv, yv, use_pbc_flag, check_bounds_flag, use_ctrw_flag, unique_seed) # Added flag
         )
 
     print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes (CTRW Mode: {use_ctrw_flag})...")
@@ -1090,7 +1102,7 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
     finally: pool.close(); pool.join()
     print(f"\nParallel execution finished. Time taken: {timer.time() - start_time:.2f} seconds")
 
-    # ... (Process results as before: filter None, stack, mean) ...
+
     successful_results = [res for res in results if res is not None]
     if not successful_results: return None, None
     print(f"Successful trials: {len(successful_results)}/{num_trials_total}")
@@ -1169,6 +1181,12 @@ if __name__ == "__main__":
     parser.add_argument('--save_anim', action='store_true',help='Save the animation file (requires --animate)')
     parser.add_argument('--anim_file', type=str, default='walk_animation.gif', help='Output filename for animation')
 
+    # --- Boundary Conditions ---
+    parser.add_argument('--pbc', action='store_true',
+                        help='Use Periodic Boundary Conditions')
+    parser.add_argument('--check_bounds', action='store_true',
+                        help='Check for walkers going out of bounds (prints warnings)')
+
     # --- Histogram Control ---
     parser.add_argument('--histograms', action='store_true',
                         help='Run a single trial and show position histograms')
@@ -1178,13 +1196,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # --- Validate Histogram Arguments ---
+    if args.pbc and args.check_bounds:
+        print("Warning: Both --pbc and --check_bounds specified. Bounds check may occur before PBC wrapping.")
     if args.histograms and not args.hist_steps:
         parser.error("--histograms requires --hist_steps to be specified.")
     if args.hist_steps and not args.histograms:
         print("Warning: --hist_steps provided but --histograms flag is missing. Histograms will not be generated.")
         # Or parser.error if you want it to be strict
 
-    args = parser.parse_args()
 
     # --- Select the Disorder Function ---
     selected_disorder_func = AVAILABLE_DISORDER_FUNCTIONS[args.disorder]
@@ -1238,7 +1257,9 @@ if __name__ == "__main__":
         disorder_params=disorder_params,  # Pass the constructed params
         xv=XV,
         yv=YV,
-        use_ctrw_flag=args.ctrw
+        use_ctrw_flag=args.ctrw,
+        use_pbc_flag = args.pbc,  # Pass PBC flag
+        check_bounds_flag = args.check_bounds  # Pass bounds check flag
     )
 
     # --- Quantitative Analysis ---
@@ -1414,7 +1435,10 @@ if __name__ == "__main__":
                 disorder_function=selected_disorder_func,  # Use same selected function
                 disorder_params=disorder_params,  # Use same constructed params
                 use_ctrw=args.ctrw,
-                store_history=True  # <<< Enable history storage
+                store_history=True,
+                use_pbc=args.pbc,  # Pass flag
+                check_bounds=args.check_bounds,
+                # <<< Enable history storage
             )
         except NameError:
             print("ERROR: RandomWalk class not defined before animation block.")
@@ -1480,7 +1504,9 @@ if __name__ == "__main__":
                 disorder_function=selected_disorder_func,
                 disorder_params=disorder_params,
                 use_ctrw=args.ctrw,
-                store_history=True  # <<< MUST store history
+                store_history=True,# <<< MUST store history
+                use_pbc=args.pbc,           # Pass flag
+                check_bounds=args.check_bounds,
             )
         except NameError:
             print("ERROR: RandomWalk class not defined before histogram block.")
