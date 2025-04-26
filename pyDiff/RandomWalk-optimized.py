@@ -1044,39 +1044,55 @@ class RandomWalk:
 def run_single_trial(params):
     """ Runs one full simulation trial and returns the MSD array. """
     try:
-        # Unpack parameters (ensure order matches task_args creation)
-        # Renamed disorder_function to disorder_function_param for clarity
+        # --- UNPACKING ORDER MUST MATCH task_args.append in main_parallel ---
+        # Original order in main_parallel append:
+        # (i, num_steps, num_walkers, step, dt, disorder_function, disorder_params,
+        #  xv, yv, use_pbc_flag, check_bounds_flag, use_ctrw_flag, unique_seed)
+
+        # Corrected unpacking order:
         trial_index, num_steps, num_walkers, step, dt, \
-        disorder_function_param, disorder_params, xv, yv, use_ctrw_flag,use_pbc_flag,check_bounds_flag, seed = params
+        disorder_function_param, disorder_params, xv, yv, \
+        use_pbc_flag, check_bounds_flag, use_ctrw_flag, seed = params # Corrected order here!
 
         np.random.seed(seed)
-        print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag})...")
+        # This print statement should now show the correct CTRW flag value
+        print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag}, PBC: {use_pbc_flag}, BoundsChk: {check_bounds_flag})...")
 
-        # Instantiate RandomWalk, passing the original disorder function parameter
+        # Instantiate RandomWalk, passing the correctly unpacked flags
+        # Ensure RandomWalk.__init__ expects these keyword arguments
         rw = RandomWalk(
-            num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
-            xv=xv, yv=yv, disorder_function=disorder_function_param, # Pass the param here
-            disorder_params=disorder_params, use_ctrw=use_ctrw_flag,use_pbc=use_pbc_flag,           # Pass PBC flag
+            num_steps=num_steps,
+            num_walkers=num_walkers, # Make sure keyword is 'num_walkers'
+            step=step,
+            dt=dt,
+            xv=xv,
+            yv=yv,
+            disorder_function=disorder_function_param,
+            disorder_params=disorder_params,
+            use_ctrw=use_ctrw_flag,
+            use_pbc=use_pbc_flag,
             check_bounds=check_bounds_flag
+            # Add store_history if needed for animation/histograms
         )
 
-        # *** CORRECTED LOGIC ***
-        # Determine if the disordered walk should be used based on whether
-        # a specific disorder function was provided in the parameters.
+        # Determine if disorder is used
         should_use_disorder = (disorder_function_param is not None)
 
-        # Pass the correctly determined flag to the trajectories method
+        # Run trajectories
+        # Ensure RandomWalk.trajectories exists and accepts use_disorder
         rw.trajectories(use_disorder=should_use_disorder)
 
-        # Compute (or retrieve) MSD results
-        msd_result = rw.compute_msd() # Assumes compute_msd retrieves pre-calculated results
+        # Compute/retrieve MSD results
+        # Ensure RandomWalk.compute_msd exists
+        msd_result = rw.compute_msd()
 
         # print(f"Finished Trial {trial_index+1}.")
         return msd_result
     except Exception as e:
         print(f"!!! Error in Trial {trial_index+1}: {e}")
-        import traceback; traceback.print_exc()
+        traceback.print_exc() # Print full traceback for debugging
         return None
+
 
 
 # --- main_parallel function (Modified task_args creation) ---
