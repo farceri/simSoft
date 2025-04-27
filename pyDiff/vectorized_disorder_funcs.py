@@ -393,3 +393,73 @@ def linear_gradient_alpha(x, y, min_alpha=0.3, max_alpha=0.9, direction='x', **k
     alpha = min_alpha + normalized_coord * (max_alpha - min_alpha)
     # Ensure alpha is within valid CTRW range (0 < alpha < 1)
     return np.clip(alpha, 0.01, 0.99).astype(np.float32)
+
+
+
+#---ONLY SPATIAL DISORDER FUNCTIONS WITHOUT RESTING PROBABILITY---
+def biased_towards_origin(x, y, strength=0.5, **kwargs):
+    """
+    Increases probability of moving towards the origin (0,0).
+    Returns [P+x, P-x, P+y, P-y] summing to 1.
+    """
+    # Calculate base equal probability
+    base_prob = 0.25
+    probs = np.full(x.shape + (4,), base_prob, dtype=np.float32)
+
+    # Calculate adjustments towards origin (stronger closer to origin)
+    dist_sq = x**2 + y**2
+    # Avoid division by zero at origin, add small epsilon
+    dist = np.sqrt(dist_sq + 1e-9)
+
+    # Calculate bias factors (negative sign moves towards origin)
+    bias_x = -strength * (x / dist) * base_prob # Max bias is strength*base_prob
+    bias_y = -strength * (y / dist) * base_prob
+
+    # Apply bias: If x>0, decrease P+x, increase P-x. If x<0, increase P+x, decrease P-x.
+    probs[..., IDX_P_X] += bias_x
+    probs[..., IDX_M_X] -= bias_x
+    probs[..., IDX_P_Y] += bias_y
+    probs[..., IDX_M_Y] -= bias_y
+
+    # Clip probabilities to ensure they are valid [0, 1]
+    probs = np.clip(probs, 0.0, 1.0)
+
+    # --- Renormalize to ensure sum is exactly 1.0 ---
+    prob_sum = np.sum(probs, axis=-1, keepdims=True)
+    # Avoid division by zero where sum is zero (shouldn't happen with base_prob=0.25)
+    prob_sum[prob_sum < 1e-9] = 1.0
+    probs /= prob_sum
+
+    return probs.astype(np.float32)
+
+def vortex_flow(x, y, strength=0.8, **kwargs):
+    """
+    Creates a swirling probability flow around the origin.
+    Returns [P+x, P-x, P+y, P-y] summing to 1.
+    """
+    base_prob = 0.25
+    probs = np.full(x.shape + (4,), base_prob, dtype=np.float32)
+    dist_sq = x**2 + y**2 + 1e-9 # Avoid division by zero
+    dist = np.sqrt(dist_sq)
+
+    # Tangential direction components (counter-clockwise)
+    tangent_x = -y / dist
+    tangent_y = x / dist
+
+    # Apply bias based on tangential direction
+    # If tangent_x > 0, increase P+x, decrease P-x
+    bias_x = strength * tangent_x * base_prob
+    # If tangent_y > 0, increase P+y, decrease P-y
+    bias_y = strength * tangent_y * base_prob
+
+    probs[..., IDX_P_X] += bias_x
+    probs[..., IDX_M_X] -= bias_x
+    probs[..., IDX_P_Y] += bias_y
+    probs[..., IDX_M_Y] -= bias_y
+
+    probs = np.clip(probs, 0.0, 1.0)
+    prob_sum = np.sum(probs, axis=-1, keepdims=True)
+    prob_sum[prob_sum < 1e-9] = 1.0
+    probs /= prob_sum
+
+    return probs.astype(np.float32)

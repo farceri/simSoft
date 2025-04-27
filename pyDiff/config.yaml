@@ -1,5 +1,5 @@
 simulation:
-  steps: 10000        # Steps for main MSD run
+  steps: 1000        # Steps for main MSD run
   walkers: 100
   trials: 20          # Parallel trials for MSD
   dt: 0.0001
@@ -16,11 +16,12 @@ boundaries:
 
 disorder:
   # Type must be one of the keys in AVAILABLE_DISORDER_FUNCTIONS in the script
-  # e.g., none, gaussian, uniform, plateau, etc.
+  # e.g., none, gaussian, uniform, plateau, ,etc.
   type: uniform
   # Parameters specific to the chosen disorder type
   # Only parameters relevant to 'type' above will be used
   params:
+    #strength: 0.7 #For bias toward origin and vortex
     #sigma: 0.1
     #max_rest_strength: 0.5 # For gaussian
     rest_level: 0.2       # For uniform
@@ -30,21 +31,21 @@ disorder:
     # etc...
 
 ctrw:
-  enabled: true # Set to true to use CTRW
+  enabled: false # Set to true to use CTRW
   # --- Alpha Configuration (NEW) ---
-  alpha_config:
+  alpha_function:
     # Type must be a key in AVAILABLE_ALPHA_FUNCTIONS in the script
     # Examples: constant, gaussian, linear_gradient
-    type: gaussian
+    type: constant
     # Parameters specific to the chosen alpha function type
     params:
-      center_alpha: 0.5
-      edge_alpha: 0.9
-      sigma: 0.3
-      #value: 0.7 # For constant_alpha
-      # min_alpha: 0.3 # For linear_gradient_alpha
-      # max_alpha: 0.9 # For linear_gradient_alpha
-      # direction: 'x' # o 'y' For linear_gradient_alpha
+      #center_alpha: 0.5
+      #edge_alpha: 0.9
+      #sigma: 0.3
+      value: 0.7 # For constant_alpha
+      #min_alpha: 0.3 # For linear_gradient_alpha
+      #max_alpha: 0.9 # For linear_gradient_alpha
+      #direction: 'x' # o 'y' For linear_gradient_alpha
 
 animation:
   enabled: false
@@ -54,6 +55,6 @@ animation:
   filename: 'walk_animation.gif' # Used only if save is true
 
 histograms:
-  enabled: true
+  enabled: false
   # List of simulation steps (integers) to generate histograms for
-  steps_to_plot: [1000, 5000, 10000]
+  steps_to_plot: [1000, 10000, 100000]

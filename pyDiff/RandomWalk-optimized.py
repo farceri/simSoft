@@ -8,6 +8,7 @@ import time as timer # To time the execution
 import os # To potentially get CPU count
 import argparse # Import argparse
 import yaml
+import traceback
 '''
 
 
@@ -203,6 +204,55 @@ def _run_ctrw_disordered_step_numba(
 
     return steps
 
+@numba.njit(cache=True)
+def _run_direction_disordered_step_numba(
+    positions,           # Input: Current (x,y) for all walkers
+    step_size,           # Input: How far a walker moves
+    precomputed_probs,   # INPUT: The table of probabilities (ny, nx, 4) [P+x, P-x, P+y, P-y]
+    x_min_grid, y_min_grid, dx, dy, nx, ny # Input: Grid info for indexing
+    ):
+    """ Numba kernel for one step with 4 direction probabilities (Prest=0). """
+    num_walkers = positions.shape[0]
+    steps = np.zeros_like(positions)
+
+    for i in range(num_walkers):
+        current_x = positions[i, 0]
+        current_y = positions[i, 1]
+        y_idx, x_idx = _calculate_grid_index_fast_numba(
+            current_x, current_y, x_min_grid, y_min_grid, dx, dy, nx, ny)
+
+        # Probabilities for [P+x, P-x, P+y, P-y]
+        direction_probs = precomputed_probs[y_idx, x_idx, :]
+        # No resting check needed, sum should be 1.0
+
+        # Choose direction based on the 4 probabilities
+        # (Using cumulative sum method - efficient in Numba)
+        choice_rand = np.random.rand() # Random number in [0, 1)
+        p_plus_x  = direction_probs[0]
+        p_minus_x = direction_probs[1]
+        p_plus_y  = direction_probs[2]
+        # p_minus_y = direction_probs[3] # Not needed for cumulative check
+
+        if choice_rand < p_plus_x:
+            direction_choice = 0 # +x
+        elif choice_rand < (p_plus_x + p_minus_x):
+            direction_choice = 1 # -x
+        elif choice_rand < (p_plus_x + p_minus_x + p_plus_y):
+            direction_choice = 2 # +y
+        else:
+            direction_choice = 3 # -y
+
+        # Assign the actual step [dx, dy] based on the chosen direction
+        if direction_choice == 0: steps[i, 0] = step_size
+        elif direction_choice == 1: steps[i, 0] = -step_size
+        elif direction_choice == 2: steps[i, 1] = step_size
+        elif direction_choice == 3: steps[i, 1] = -step_size
+
+    return steps
+
+
+
+
 
 @numba.njit(cache=True)
 def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, ny):
@@ -243,17 +293,81 @@ def _calculate_grid_index_fast_numba(x, y, x_min_grid, y_min_grid, dx, dy, nx, n
 
     return y_index, x_index
 
+# =============================================================================
+#IMPORT VECTORIZED DISORDER FUNCTIONS FROM ANOTHER FILE
+
+from vectorized_disorder_funcs import (
+    my_spatial_disorder_vectorized,
+    gaussian_rest_prob_vectorized,
+    uniform_rest_prob_vectorized,
+    plateau_rest_prob_vectorized,
+    multi_center_rest_prob_vectorized,
+    exponential_rest_prob_vectorized,
+    boundary_dependent_rest_prob_vectorized,
+    constant_alpha,
+    gaussian_alpha,
+    linear_gradient_alpha,
+    biased_towards_origin,
+    vortex_flow
+)
+# Use the VECTORIZED versions suitable for precomputation
+AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
+    "none": None, # Special case for ordered walk
+    "uniform": uniform_rest_prob_vectorized,
+    "gaussian": gaussian_rest_prob_vectorized,
+    "plateau": plateau_rest_prob_vectorized,
+    "multi_center": multi_center_rest_prob_vectorized,
+    "exponential": exponential_rest_prob_vectorized,
+    "boundary": boundary_dependent_rest_prob_vectorized,
+    "fixed_rest": my_spatial_disorder_vectorized,
+    # Example name for the fixed rest one
+}
+
+AVAILABLE_ALPHA_FUNCTIONS = {
+    "constant": constant_alpha,
+    "gaussian": gaussian_alpha,
+    "linear_gradient": linear_gradient_alpha,
+    # Add keys matching your alpha function names
+}
+
+AVAILABLE_DIRECTION_DISORDER_FUNCTIONS = {
+    "bias_origin": biased_towards_origin,
+    "vortex": vortex_flow,
+    # ... other directional functions
+}
+
+# Combine for argparse, but keep separate for logic
+ALL_AVAILABLE_DISORDER_FUNCTIONS = {
+    "none": None,
+    **AVAILABLE_STANDARD_DISORDER_FUNCTIONS,
+    **AVAILABLE_DIRECTION_DISORDER_FUNCTIONS
+}
 
 
 class RandomWalk:
-    def __init__(self,use_pbc=False, alpha_function=None, alpha_params=None,check_bounds=False, interpolation=False,store_history=False, disorder_function=None, num_steps=1000, step=0.001, num_walkers=100,
-                 xv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[0],
-                 yv=np.meshgrid(np.linspace(-1, 1, 2000), np.linspace(-1, 1, 2000))[1], dt=0.0001,disorder_params={'sigma': 1.0, 'max_rest_strength': 0.95},use_ctrw=False):
+    def __init__(self,
+                 num_steps=1000,
+                 num_walkers=100,
+                 step=0.001,
+                 dt=0.0001,
+                 xv=None,  # Provide default grid creation if needed
+                 yv=None,
+                 disorder_function=None,
+                 disorder_params=None,
+                 disorder_mode='standard',  # <<< Default value if not passed
+                 use_ctrw=False,
+                 alpha_type='constant',
+                 alpha_params=None,
+                 use_pbc=False,
+                 check_bounds=False,
+                 store_history=False,
+                 interpolation=False):  # Added interpolation back if needed
+
         self.num_walkers = num_walkers
         self.num_steps = num_steps
+
         # --- Grid Setup ---
         if xv is None or yv is None:
-            # Default grid if none provided
             print("Warning: No grid provided, using default 100x100 grid.")
             xv, yv = np.meshgrid(np.linspace(-1, 1, 100), np.linspace(-1, 1, 100))
         self.xv = xv
@@ -263,89 +377,100 @@ class RandomWalk:
         self.x_max = np.max(self.xv)
         self.y_min = np.min(self.yv)
         self.y_max = np.max(self.yv)
-        # --- Setup for _get_grid_index_fast ---
-        # Check if grid is uniform and calculate parameters if possible
-        self.is_uniform_grid = False  # Flag
+        self.box_width = self.x_max - self.x_min
+        self.box_height = self.y_max - self.y_min
+
+        # --- Fast Indexing Setup ---
+        self.is_uniform_grid = False
+        self.x_min_grid, self.y_min_grid, self.dx, self.dy = 0.0, 0.0, 1.0, 1.0
         if self.nx > 1 and self.ny > 1:
             self.x_coords = self.xv[0, :]
             self.y_coords = self.yv[:, 0]
-            # Check for uniform spacing (within tolerance)
             dxs = np.diff(self.x_coords)
             dys = np.diff(self.y_coords)
             if np.allclose(dxs, dxs[0]) and np.allclose(dys, dys[0]):
                 self.is_uniform_grid = True
-                self.x_min_grid = self.x_coords[0]
+                self.x_min_grid = self.x_coords[0];
                 self.y_min_grid = self.y_coords[0]
-                self.dx = dxs[0]
-                self.dy = dys[0]
-                # Ensure dx/dy are not zero
-                self.dx = self.dx if abs(self.dx) > 1e-15 else 1.0
-                self.dy = self.dy if abs(self.dy) > 1e-15 else 1.0
+                self.dx = dxs[0] if abs(dxs[0]) > 1e-15 else 1.0
+                self.dy = dys[0] if abs(dys[0]) > 1e-15 else 1.0
                 print("Uniform grid detected. Using fast indexing.")
             else:
-                print("Non-uniform grid detected. Will use robust indexing.")
-        elif self.nx == 1 or self.ny == 1:
-            # Handle 1D grid cases if necessary, or default to robust
-            print("Grid is 1D or single point. Using robust indexing.")
-            pass  # Fallback to robust indexing below
-        else:
-            print("Grid has zero dimensions? Using robust indexing.")
+                print("Non-uniform grid detected.")
 
-
-
-        self.box_size = np.array([xv.shape[0], yv.shape[0]])
+        # --- Simulation Parameters ---
         self.dt = dt
-        self.positions = np.zeros((self.num_walkers, 2))
-        self.initial_positions = np.copy(self.positions)
-        # self.initial_positions=np.zeros((self.num_walkers,2))+0.5
         self.step = step
-        self.all_positions = [np.copy(self.positions)]
-        self.time = np.arange(self.num_steps + 1)
-        self.disorder_function = disorder_function if disorder_function is not None else self._default_disorder_function
-        self.disorder_params = disorder_params if disorder_params is not None else {}
-        self.use_ctrw = use_ctrw  # Store flag
-
-        # --- CTRW State ---
-        self.wait_times = np.zeros(self.num_walkers, dtype=np.int64)  # Initialize always
-        self.alpha_function = alpha_function  # Store function object
-        self.alpha_params = alpha_params if alpha_params is not None else {}
-        self.alpha_grid = None  # Initialize
-        if self.use_ctrw:
-            print("CTRW enabled. Precomputing alpha grid...")
-            try:
-                self._precompute_alpha_grid()  # Call the new method
-                if self.alpha_grid is None:
-                    # This happens if alpha_function is None or precomputation fails
-                    raise ValueError("Alpha grid precomputation failed or no alpha function provided for CTRW.")
-                print(f"Alpha grid precomputation finished using {getattr(self.alpha_function, '__name__', 'N/A')}.")
-            except Exception as e:
-                print(f"***** ERROR during alpha grid precomputation: {e} *****")
-                import traceback
-                traceback.print_exc()
-                raise  # Re-raise error to stop simulation if alpha grid is needed but failed
-
-        # --- Precomputation ---
-        self.precomputed_probs = None
-        # Call precomputation if not using default
-        if self.disorder_function != self._default_disorder_function:
-            print(f"Precomputing probabilities using {self.disorder_function.__name__}...")
-            self._precompute_probabilities()
-            if self.precomputed_probs is not None:
-                print("Precomputation finished.")
-            else:
-                print("Precomputation failed.")
-
+        self.time = np.arange(self.num_steps + 1) * self.dt
+        self.positions = np.zeros((self.num_walkers, 2), dtype=np.float64)
+        self.initial_positions = np.copy(self.positions)
         self.store_history = store_history
-        self.all_positions = []  # Initialize as list
-        if self.store_history:
-            self.all_positions.append(np.copy(self.initial_positions))
+        self.all_positions = []
+        if self.store_history: self.all_positions.append(np.copy(self.initial_positions))
 
-        # *** Store the boundary condition flags ***
+        # --- Boundary Conditions ---
         self.use_pbc = use_pbc
         self.perform_bounds_check = check_bounds
         if self.use_pbc and self.perform_bounds_check:
-            print("Warning: Both PBC and bounds checking enabled. Bounds check may trigger before PBC wraps.")
+            print("Warning: Both PBC and bounds checking enabled.")
         self.out_of_bounds_walkers = set()
+
+        # --- Disorder Setup ---
+        self.disorder_function = disorder_function
+        self.disorder_params = disorder_params if disorder_params is not None else {}
+        self.disorder_mode = disorder_mode  # <<< STORE the passed mode (Removed overwrite)
+        self.precomputed_probs = None
+
+        # --- CTRW Setup ---
+        self.use_ctrw = use_ctrw
+        self.wait_times = np.zeros(self.num_walkers, dtype=np.int64)
+        self.alpha_params = alpha_params if alpha_params is not None else {}
+        self.alpha_grid = None
+        self.alpha_function = None
+        if self.use_ctrw:
+            # Ensure AVAILABLE_ALPHA_FUNCTIONS is accessible here (global or imported)
+            self.alpha_function = AVAILABLE_ALPHA_FUNCTIONS.get(alpha_type)
+            if not callable(self.alpha_function):
+                print(f"ERROR in __init__: Could not find alpha function for type '{alpha_type}'")
+                # Decide how to handle: raise error? set self.use_ctrw = False?
+        print(f"  [RW Init Debug Trial {os.getpid()}] Received alpha_function: {repr(self.alpha_function)}")
+        print(f"  [RW Init Debug Trial {os.getpid()}] Is callable? {callable(self.alpha_function)}")
+        # --- Precomputation Logic (Correctly Indented) ---
+        # Disable CTRW if mode requires it
+        if self.disorder_mode == 'direction_only' and self.use_ctrw:
+            print("Warning: CTRW disabled because 'direction_only' disorder mode selected.")
+            self.use_ctrw = False
+        if self.disorder_mode == 'none' and self.use_ctrw:
+            print("Warning: CTRW disabled because disorder mode is 'none'.")
+            self.use_ctrw = False
+
+        # Call appropriate probability precomputation based on mode
+        if self.disorder_mode == 'standard':
+            print("Precomputing standard (5) probabilities...")
+            # Ensure this method exists and handles errors
+            self._precompute_standard_probabilities()
+        elif self.disorder_mode == 'direction_only':
+            print("Precomputing directional (4) probabilities...")
+            # Ensure this method exists and handles errors
+            self._precompute_direction_probabilities()
+        elif self.disorder_mode == 'none':
+            print("No disorder function provided. Using ordered walk.")
+        else:
+            # This case should ideally not be reached if mode is validated earlier
+            print(f"Warning: Unknown disorder mode '{self.disorder_mode}' during initialization.")
+            self.disorder_mode = 'none'  # Fallback to ordered? Or raise error?
+
+        # Precompute alpha grid only if CTRW is still enabled (must be standard mode)
+        if self.use_ctrw:  # Check if CTRW is still enabled after potential disabling above
+            print("Precomputing alpha grid for CTRW...")
+            # Ensure this method exists and handles errors
+            self._precompute_alpha_grid()
+
+        # --- Other Attributes ---
+        self.msd_results = None
+        self.current_step_num = 0  # For error messages
+
+
 
     def _precompute_alpha_grid(self):
         """ Calls the vectorized self.alpha_function to precompute alpha grid. """
@@ -391,68 +516,52 @@ class RandomWalk:
 
 
 
-    def _precompute_probabilities(self):
-        """
-        Calls the vectorized self.disorder_function to precompute probabilities.
-        MODIFIED WITH DEBUGGING PRINTS.
-        """
-        if not callable(self.disorder_function):
-            print("Warning: No valid disorder function provided for precomputation.")
-            self.precomputed_probs = None
-            return
+    def _precompute_standard_probabilities(self):
+        """ Calls the vectorized self.disorder_function to precompute 5 probabilities. """
+        if not callable(self.disorder_function) or self.disorder_function == self._default_disorder_function:
+             # Handle default case if needed, maybe precompute uniform [0.25 ... 0]
+             print("Using default or no standard disorder function.")
+             # If default needed, create the 5-prob array here
+             # self.precomputed_probs = self._default_disorder_function(self.xv, self.yv).astype(np.float32)
+             return # Or precompute default
 
-        print(f"Attempting precomputation with {self.disorder_function.__name__}...")
-        print(f"  Input xv shape: {self.xv.shape}, dtype: {self.xv.dtype}")
-        print(f"  Input yv shape: {self.yv.shape}, dtype: {self.yv.dtype}")
-        print(f"  Disorder params: {self.disorder_params}")
-
+        print(f"Attempting standard precomputation with {self.disorder_function.__name__}...")
         try:
-            # --- Step 1: Call the disorder function ---
-            print("  Calling disorder function...")
-            result_probs = self.disorder_function(
-                self.xv, self.yv, **self.disorder_params
-            )
-            print("  Disorder function call finished.")
-            print(
-                f"  Function returned type: {type(result_probs)}, shape: {getattr(result_probs, 'shape', 'N/A')}, dtype: {getattr(result_probs, 'dtype', 'N/A')}")
-
-            # --- Step 2: Check for obvious issues before type conversion ---
-            if isinstance(result_probs, np.ndarray):
-                print(f"  Checking result array for NaNs: {np.isnan(result_probs).any()}")
-                print(f"  Checking result array for Infs: {np.isinf(result_probs).any()}")
-            else:
-                print("  Result is not a NumPy array!")
-                raise TypeError("Disorder function did not return a NumPy array.")
-
-            # --- Step 3: Convert type ---
-            print(f"  Attempting type conversion to np.float32...")
+            result_probs = self.disorder_function(self.xv, self.yv, **self.disorder_params)
+            # --- Validation for 5 probabilities ---
+            if not isinstance(result_probs, np.ndarray): raise TypeError("Function didn't return NumPy array.")
+            if result_probs.shape != (self.ny, self.nx, 5): raise ValueError(f"Expected shape (..., 5), got {result_probs.shape}")
+            # Add NaN/Inf checks
+            # Add sum check (should sum to 1.0)
+            sums = np.sum(result_probs, axis=-1)
+            if not np.allclose(sums, 1.0): print("Warning: Standard probabilities do not sum to 1!")
             self.precomputed_probs = result_probs.astype(np.float32)
-            print(
-                f"  Type conversion successful. Shape: {self.precomputed_probs.shape}, dtype: {self.precomputed_probs.dtype}")
-
-            # --- Step 4: Check shape ---
-            expected_shape = (self.ny, self.nx, 5)
-            if self.precomputed_probs.shape != expected_shape:
-                raise ValueError(
-                    f"Precomputed probs have wrong shape: {self.precomputed_probs.shape}. Expected: {expected_shape}")
-            print("  Shape check successful.")
-
+            print("Standard precomputation finished.")
         except Exception as e:
-            print(
-                f"***** ERROR during precomputation with {self.disorder_function.__name__}: {e} *****")  # Make error stand out
-            import traceback
-            traceback.print_exc()  # Print the full traceback where the error occurred
-            print("Precomputation failed. Check if the disorder function is vectorized correctly.")
-            self.precomputed_probs = None  # Ensure it's None if failed
+            print(f"***** ERROR during standard precomputation: {e} *****")
+            self.precomputed_probs = None; raise # Re-raise
 
-        # Optional sanity check can remain here if desired
-        if self.precomputed_probs is not None:
-            print("  Running final sum check...")
-            sums = np.sum(self.precomputed_probs, axis=2)
-            if not np.allclose(sums, 1.0):
-                print("  Warning: Precomputed probabilities do not sum to 1 everywhere!")
-            else:
-                print("  Final sum check passed.")
+    def _precompute_direction_probabilities(self):
+        """ Calls the vectorized self.disorder_function to precompute 4 probabilities. """
+        if not callable(self.disorder_function):
+             print("Error: No valid directional disorder function provided.")
+             self.precomputed_probs = None; raise ValueError("Missing directional function")
+
+        print(f"Attempting directional precomputation with {self.disorder_function.__name__}...")
+        try:
+            result_probs = self.disorder_function(self.xv, self.yv, **self.disorder_params)
+            # --- Validation for 4 probabilities ---
+            if not isinstance(result_probs, np.ndarray): raise TypeError("Function didn't return NumPy array.")
+            if result_probs.shape != (self.ny, self.nx, 4): raise ValueError(f"Expected shape (..., 4), got {result_probs.shape}")
+            # Add NaN/Inf checks
+            # Add sum check (should sum to 1.0)
+            sums = np.sum(result_probs, axis=-1)
+            if not np.allclose(sums, 1.0): print("Warning: Directional probabilities do not sum to 1!")
+            self.precomputed_probs = result_probs.astype(np.float32)
+            print("Directional precomputation finished.")
+        except Exception as e:
+            print(f"***** ERROR during directional precomputation: {e} *****")
+            self.precomputed_probs = None; raise # Re-raise
 
     def apply_pbc(self):
         """Apply periodic boundary conditions to keep particles inside the simulation box defined by grid min/max."""
@@ -519,41 +628,41 @@ class RandomWalk:
 
     # --- Modified random_walk_disordered Method ---
     def random_walk_disordered(self):
-        """ Performs one step of disordered walk. Uses standard or CTRW kernel. """
-        if self.precomputed_probs is None and self.disorder_function != self._default_disorder_function:
-             # Allow running if default function (no precomp needed) or if precomp succeeded
-             raise ValueError("Precomputed probabilities needed but not available.")
+        """ Performs one step of disordered walk based on the configured mode. """
         if not self.is_uniform_grid:
-             raise NotImplementedError("Optimized kernels require uniform grid.")
+            raise NotImplementedError("Optimized kernels require uniform grid.")
 
-        if self.use_ctrw:
-            # --- Check if alpha grid is ready for CTRW ---
-            if self.alpha_grid is None:
-                raise ValueError("CTRW is enabled, but the spatial alpha grid is missing or invalid.")
+        # Check if precomputation succeeded for the chosen mode
+        if self.precomputed_probs is None:
+             # This check might be redundant if precomputation raises errors, but good safety.
+             raise ValueError(f"Precomputed probabilities (mode: {self.disorder_mode}) needed but not available.")
 
-            # --- Call CTRW Numba kernel, passing alpha_grid ---
-            calculated_steps = _run_ctrw_disordered_step_numba(
-                self.positions, self.wait_times, self.step, self.precomputed_probs,
-                self.alpha_grid, # <<< Pass the precomputed alpha grid >>>
-                self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
-            )
-        else:
-            # --- Call Standard Numba kernel ---
-            # Make sure precomputed_probs exists if a non-default disorder func was used
-            if self.precomputed_probs is None and self.disorder_function != self._default_disorder_function:
-                 # This case might occur if only CTRW was enabled but disorder was 'none'
-                 # We need probabilities even for standard walk if disorder != none
-                 # However, the check at the start should cover this.
-                 # If disorder is 'none', we should be calling random_walk_ordered instead via trajectories()
-                 raise ValueError("Standard disordered walk called without precomputed probabilities.")
-
-            calculated_steps = _run_standard_disordered_step_numba(
+        # --- Call the correct kernel based on mode ---
+        if self.disorder_mode == 'direction_only':
+            calculated_steps = _run_direction_disordered_step_numba(
                 self.positions, self.step, self.precomputed_probs,
                 self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
             )
+        elif self.disorder_mode == 'standard':
+            if self.use_ctrw:
+                if self.alpha_grid is None: raise ValueError("CTRW enabled, but alpha grid missing.")
+                calculated_steps = _run_ctrw_disordered_step_numba(
+                    self.positions, self.wait_times, self.step, self.precomputed_probs,
+                    self.alpha_grid, # Pass alpha grid
+                    self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
+                )
+            else:
+                calculated_steps = _run_standard_disordered_step_numba(
+                    self.positions, self.step, self.precomputed_probs,
+                    self.x_min_grid, self.y_min_grid, self.dx, self.dy, self.nx, self.ny
+                )
+        else: # Should only be 'none' if called incorrectly
+             raise ValueError(f"random_walk_disordered called with invalid mode: {self.disorder_mode}")
 
-        # Update positions
+
+        # Update positions and apply BCs
         self.positions += calculated_steps
+        # if self.use_pbc: self.apply_pbc() ... etc
 
     # --------------------------------------------
 
@@ -671,15 +780,26 @@ class RandomWalk:
         if self.store_history and not self.all_positions:  # Ensure initial stored if list was cleared
             self.all_positions = [np.copy(self.initial_positions)]
 
+        if self.disorder_mode == 'none':
+            run_label = "Ordered"
+        elif self.disorder_mode == 'direction_only':
+            run_label = "Directional Disordered"
+        elif self.disorder_mode == 'standard':
+            run_label = "Standard Disordered (CTRW)" if self.use_ctrw else "Standard Disordered"
+        else:
+            run_label = "Unknown"
+        print(f"Running trajectories ({run_label})...")
 
-        print(
-            f"Running trajectories ({'CTRW' if self.use_ctrw and use_disorder else ('Standard Disordered' if use_disorder else 'Ordered')})...")
+
         for step_num in range(1, self.num_steps + 1):
-            self.current_step_num = step_num
-            if use_disorder:
-                self.random_walk_disordered()  # Will use correct kernel based on self.use_ctrw
-            else:
+            # --- Choose walk step based on mode ---
+            if self.disorder_mode == 'none':
                 self.random_walk_ordered()
+            elif self.disorder_mode == 'standard' or self.disorder_mode == 'direction_only':
+                # Call the unified disordered method, it will use the correct kernel
+                self.random_walk_disordered()
+            else:
+                raise ValueError(f"Invalid disorder mode in trajectories loop: {self.disorder_mode}")
 
             # --- Apply Boundary Conditions / Checks ---
             if self.use_pbc:
@@ -1064,248 +1184,125 @@ class RandomWalk:
 # =============================================================================
 def run_single_trial(params):
     """ Runs one full simulation trial and returns the MSD array. """
+    trial_index = -1
     try:
-        # --- UNPACKING ORDER MUST MATCH task_args.append in main_parallel ---
-        # Original order in main_parallel append:
-        # (i, num_steps, num_walkers, step, dt, disorder_function, disorder_params,
-        #  xv, yv, use_pbc_flag, check_bounds_flag, use_ctrw_flag, unique_seed)
-
-        # Corrected unpacking order:
+        # --- Unpack parameters including type names and param dicts ---
         trial_index, num_steps, num_walkers, step, dt, \
-        disorder_function_param, disorder_params,alpha_function_param, alpha_params_param, xv, yv, \
-        use_pbc_flag, check_bounds_flag, use_ctrw_flag, seed = params # Corrected order here!
+        disorder_type_param, disorder_params_param, \
+        alpha_type_param, alpha_params_param, \
+        disorder_mode_param, \
+        xv, yv, \
+        use_ctrw_flag, use_pbc_flag, check_bounds_flag, seed = params
 
         np.random.seed(seed)
-        # This print statement should now show the correct CTRW flag value
-        print(f"Starting Trial {trial_index+1} (Seed: {seed}, CTRW: {use_ctrw_flag}, PBC: {use_pbc_flag}, BoundsChk: {check_bounds_flag})...")
+        print(f"Starting Trial {trial_index+1} (Seed: {seed}, Mode: {disorder_mode_param}, CTRW: {use_ctrw_flag}, DisType: {disorder_type_param}, AlphaType: {alpha_type_param})...")
 
-        # Instantiate RandomWalk, passing the correctly unpacked flags
-        # Ensure RandomWalk.__init__ expects these keyword arguments
+        # *** Look up the actual function objects based on the type names ***
+        # Ensure the dictionaries are accessible in this scope (e.g., global or imported)
+        selected_disorder_func_obj = ALL_AVAILABLE_DISORDER_FUNCTIONS.get(disorder_type_param)
+        selected_alpha_func_obj = None
+        if use_ctrw_flag:
+            selected_alpha_func_obj = AVAILABLE_ALPHA_FUNCTIONS.get(alpha_type_param)
+            # Add error check if function not found and CTRW is True
+            if selected_alpha_func_obj is None and alpha_type_param != 'N/A':
+                 raise ValueError(f"Alpha function type '{alpha_type_param}' requested but not found in dictionary.")
+
+        # Instantiate RandomWalk, passing the function OBJECTS
+        # Ensure RandomWalk.__init__ accepts these keyword arguments
         rw = RandomWalk(
-            num_steps=num_steps,
-            num_walkers=num_walkers, # Make sure keyword is 'num_walkers'
-            step=step,
-            dt=dt,
-            xv=xv,
-            yv=yv,
-            disorder_function=disorder_function_param,
-            disorder_params=disorder_params,
+            num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
+            xv=xv, yv=yv,
+            disorder_function=selected_disorder_func_obj,  # Pass function object
+            disorder_params=disorder_params_param,
+            disorder_mode=disorder_mode_param,
             use_ctrw=use_ctrw_flag,
-            alpha_function=alpha_function_param,  # Pass alpha function
-            alpha_params=alpha_params_param,  # Pass alpha params
+            # === MODIFIED LINES START ===
+            alpha_type=alpha_type_param,  # Pass the type string (e.g., 'constant')
+            alpha_params=alpha_params_param,  # Pass the parameter dictionary
+            # === MODIFIED LINES END ===
             use_pbc=use_pbc_flag,
             check_bounds=check_bounds_flag
-            # Add store_history if needed for animation/histograms
+            # store_history=...
         )
 
-        # Determine if disorder is used
-        should_use_disorder = (disorder_function_param is not None)
+        # trajectories method now uses the internal disorder_mode
+        rw.trajectories()
 
-        # Run trajectories
-        # Ensure RandomWalk.trajectories exists and accepts use_disorder
-        rw.trajectories(use_disorder=should_use_disorder)
-
-        # Compute/retrieve MSD results
-        # Ensure RandomWalk.compute_msd exists
         msd_result = rw.compute_msd()
-
-        # print(f"Finished Trial {trial_index+1}.")
         return msd_result
     except Exception as e:
-        print(f"!!! Error in Trial {trial_index+1}: {e}")
-        traceback.print_exc() # Print full traceback for debugging
+        trial_label = trial_index + 1 if trial_index != -1 else 'UNKNOWN'
+        print(f"!!! Error in Trial {trial_label}: {e}")
+        traceback.print_exc()
         return None
 
 
 
 # --- main_parallel function (Modified task_args creation) ---
 def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
-                  disorder_function, disorder_params,alpha_function,alpha_params, xv, yv, use_pbc_flag, check_bounds_flag,use_ctrw_flag): # Added use_ctrw_flag
-    # ... (timer start, get num_workers) ...
-    start_time = timer.time(); num_workers = os.cpu_count(); print(f"Detected {num_workers} cores.")
+                  disorder_type, disorder_params, # Accept type name & params
+                  alpha_type, alpha_params,       # Accept type name & params
+                  disorder_mode,
+                  xv, yv,
+                  use_ctrw_flag, use_pbc_flag, check_bounds_flag):
+    start_time = timer.time()
+    # ... (get num_workers) ...
+    try: num_workers = os.cpu_count(); print(f"Detected {num_workers} cores.")
+    except: num_workers=1
 
     base_seed = np.random.randint(10000)
     task_args = []
     for i in range(num_trials_total):
         unique_seed = base_seed + i
-        task_args.append( # Ensure all needed args are included in the correct order
-            (i, num_steps, num_walkers, step, dt,
-             disorder_function, disorder_params,alpha_function,alpha_params, xv, yv, use_pbc_flag, check_bounds_flag, use_ctrw_flag, unique_seed) # Added flag
+        # Add disorder_mode to the arguments passed to each worker
+        # *** CORRECTED: Packing 16 items into the tuple ***
+        task_args.append(
+            (i, num_steps, num_walkers, step, dt,               # 5
+             disorder_type, disorder_params,                    # 2
+             alpha_type, alpha_params,                          # 2
+             disorder_mode,                                     # 1
+             xv, yv,                                            # 2
+             use_ctrw_flag, use_pbc_flag, check_bounds_flag,    # 3
+             unique_seed)                                       # 1 --> Total 16 items
         )
 
-    print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes (CTRW Mode: {use_ctrw_flag})...")
-    pool = multiprocessing.Pool(processes=num_workers)
+    # Print the mode being used for the parallel run
+    print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes (Disorder Mode: {disorder_mode}, CTRW: {use_ctrw_flag})...")
+    # ... (multiprocessing pool execution, result processing) ...
     results = []
     try:
-        results = pool.map(run_single_trial, task_args)
-    except Exception as e: print(f"!!! Error during parallel execution: {e}")
-    finally: pool.close(); pool.join()
+        # Ensure Pool is managed correctly (e.g., with 'with' statement)
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            results = pool.map(run_single_trial, task_args)
+    except Exception as e:
+        # This catches errors during the map process itself (like pickling issues)
+        print(f"!!! Error during parallel execution setup/map: {e}")
+        # Optionally print traceback here too if needed
+        # traceback.print_exc()
+
     print(f"\nParallel execution finished. Time taken: {timer.time() - start_time:.2f} seconds")
 
-
+    # ... (rest of the function: process results, return avg_msd, time_axis) ...
     successful_results = [res for res in results if res is not None]
-    if not successful_results: return None, None
+    if not successful_results:
+        print("No trials completed successfully.")
+        return None, None
     print(f"Successful trials: {len(successful_results)}/{num_trials_total}")
-    msd_stack = np.stack(successful_results, axis=0)
-    avg_msd = np.mean(msd_stack, axis=0)
-    time_axis = np.arange(num_steps + 1)*dt
-    return avg_msd, time_axis
-
-
-# =============================================================================
-#IMPORT VECTORIZED DISORDER FUNCTIONS FROM ANOTHER FILE
-
-from vectorized_disorder_funcs import (
-    my_spatial_disorder_vectorized,
-    gaussian_rest_prob_vectorized,
-    uniform_rest_prob_vectorized,
-    plateau_rest_prob_vectorized,
-    multi_center_rest_prob_vectorized,
-    exponential_rest_prob_vectorized,
-    boundary_dependent_rest_prob_vectorized,
-    constant_alpha,
-    gaussian_alpha,
-    linear_gradient_alpha
-)
-# Use the VECTORIZED versions suitable for precomputation
-AVAILABLE_DISORDER_FUNCTIONS = {
-    "none": None, # Special case for ordered walk
-    "uniform": uniform_rest_prob_vectorized,
-    "gaussian": gaussian_rest_prob_vectorized,
-    "plateau": plateau_rest_prob_vectorized,
-    "multi_center": multi_center_rest_prob_vectorized,
-    "exponential": exponential_rest_prob_vectorized,
-    "boundary": boundary_dependent_rest_prob_vectorized,
-    "fixed_rest": my_spatial_disorder_vectorized, # Example name for the fixed rest one
-}
-
-AVAILABLE_ALPHA_FUNCTIONS = {
-    "constant": constant_alpha,
-    "gaussian": gaussian_alpha,
-    "linear_gradient": linear_gradient_alpha,
-    # Add keys matching your alpha function names
-}
-
-
+    try:
+        msd_stack = np.stack(successful_results, axis=0)
+        avg_msd = np.mean(msd_stack, axis=0)
+        time_axis = np.arange(num_steps + 1) * dt
+        return avg_msd, time_axis
+    except Exception as e:
+        print(f"!!! Error processing results (e.g., stacking): {e}")
+        traceback.print_exc()
+        return None, None
 
 
 
 
 if __name__ == "__main__":
 
-    '''
-    parser = argparse.ArgumentParser(description="Run Random Walk Simulation")
-
-    # --- Core Simulation Parameters ---
-    parser.add_argument('--steps', type=int, default=1000, help='Number of simulation steps')
-    parser.add_argument('--walkers', type=int, default=100, help='Number of walkers')
-    parser.add_argument('--trials', type=int, default=10, help='Number of parallel trials')
-    parser.add_argument('--step_size', type=float, default=0.001, help='Step size per move')
-    parser.add_argument('--dt', type=float, default=0.0001, help='Time step duration')
-    parser.add_argument('--grid_size', type=int, default=2000, help='Grid resolution (grid_size x grid_size)')
-
-    # --- CTRW Parameters ---
-    parser.add_argument('--ctrw', action='store_true', help='Enable Continuous Time Random Walk (CTRW)')
-    parser.add_argument('--alpha', type=float, default=0.7, help='CTRW exponent alpha (0 < alpha < 1)')
-
-    # --- Disorder Function Selection ---
-    parser.add_argument('--disorder', type=str, default='none',
-                        choices=AVAILABLE_DISORDER_FUNCTIONS.keys(),
-                        help='Type of disorder function to use')
-
-    # --- Disorder Function Parameters (add arguments for parameters of ALL functions) ---
-    # Note: Only parameters relevant to the chosen --disorder will be used.
-    # Gaussian / Exponential / Plateau / Multi-Center / Fixed
-    parser.add_argument('--max_rest', type=float,
-                        help='Max resting probability (for gaussian, plateau, exp, multi_center, fixed_rest)')
-    parser.add_argument('--sigma', type=float, help='Sigma for Gaussian disorder')
-    # Uniform
-    parser.add_argument('--rest_level', type=float, help='Uniform rest level')
-    # Plateau
-    parser.add_argument('--plateau_radius', type=float, help='Radius for plateau disorder')
-    parser.add_argument('--decay_rate', type=float, help='Decay rate (for plateau, exp, multi_center, boundary)')
-    # Multi-Center (simplified example, could add center coords too)
-    parser.add_argument('--strength1', type=float, help='Strength for multi-center 1')
-    parser.add_argument('--strength2', type=float, help='Strength for multi-center 2')
-    # Boundary
-    parser.add_argument('--boundary_strength', type=float, help='Strength for boundary disorder')
-    # Fixed Rest (my_spatial_disorder_vectorized)
-    parser.add_argument('--rest_fixed', type=float, help='Fixed rest probability for fixed_rest type')
-
-    # --- Animation Control ---
-    parser.add_argument('--animate', action='store_true', help='Run a single trial and generate animation')
-    parser.add_argument('--anim_steps', type=int, default=500, help='Number of steps for animation run')
-    parser.add_argument('--anim_walker', type=int, default=0, help='Index of walker to animate')
-    parser.add_argument('--save_anim', action='store_true',help='Save the animation file (requires --animate)')
-    parser.add_argument('--anim_file', type=str, default='walk_animation.gif', help='Output filename for animation')
-
-    # --- Boundary Conditions ---
-    parser.add_argument('--pbc', action='store_true',
-                        help='Use Periodic Boundary Conditions')
-    parser.add_argument('--check_bounds', action='store_true',
-                        help='Check for walkers going out of bounds (prints warnings)')
-
-    # --- Histogram Control ---
-    parser.add_argument('--histograms', action='store_true',
-                        help='Run a single trial and show position histograms')
-    parser.add_argument('--hist_steps', type=int, nargs='+',  # Expect one or more integers
-                        help='List of time steps (integers) to plot histograms for (requires --histograms)')
-
-    args = parser.parse_args()
-
-    # --- Validate Histogram Arguments ---
-    if args.pbc and args.check_bounds:
-        print("Warning: Both --pbc and --check_bounds specified. Bounds check may occur before PBC wrapping.")
-    if args.histograms and not args.hist_steps:
-        parser.error("--histograms requires --hist_steps to be specified.")
-    if args.hist_steps and not args.histograms:
-        print("Warning: --hist_steps provided but --histograms flag is missing. Histograms will not be generated.")
-        # Or parser.error if you want it to be strict
-
-
-    # --- Select the Disorder Function ---
-    selected_disorder_func = AVAILABLE_DISORDER_FUNCTIONS[args.disorder]
-
-    # --- Build Disorder Parameters Dictionary ---
-    # Include only non-None arguments relevant to the selected function (or CTRW)
-    disorder_params = {}
-    potential_params = {
-        'max_rest_strength': args.max_rest,  # Name used in gaussian_rest_prob_vectorized
-        'sigma': args.sigma,
-        'rest_level': args.rest_level,
-        'plateau_radius': args.plateau_radius,
-        'max_rest': args.max_rest,  # Name used in plateau, exp, multi_center
-        'decay_rate': args.decay_rate,
-        'strength1': args.strength1,
-        'strength2': args.strength2,
-        'max_total_rest': args.max_rest,  # Used in multi_center, boundary
-        'boundary_strength': args.boundary_strength,
-        'rest_fixed': args.rest_fixed,  # Used in my_spatial_disorder_vectorized
-    }
-    for key, value in potential_params.items():
-        if value is not None:
-            disorder_params[key] = value
-
-    # Add CTRW alpha if enabled
-    if args.ctrw:
-        if not (0 < args.alpha < 1):
-            parser.error("--alpha must be between 0 and 1 for CTRW")
-        disorder_params['ctrw_alpha'] = args.alpha
-        print(f"CTRW Enabled with alpha = {args.alpha}")
-    else:
-        print("CTRW Disabled (Standard Rest/Movement)")
-    
-    
-    # --- Setup Grid ---
-    print(f"Setting up grid ({args.grid_size}x{args.grid_size})...")
-    XV, YV = np.meshgrid(np.linspace(-1, 1, args.grid_size), np.linspace(-1, 1, args.grid_size))
-    print("Grid setup done.")
-
-    # --- Run Parallel Simulation for MSD ---
-    print(f"\n--- Running Parallel Simulation ({args.trials} Trials) ---")
-    print(f"Disorder Function: {args.disorder}")
-    print(f"Parameters: {disorder_params}")
-    '''
 
     # --- Argument Parser: Only for the config file path ---
     parser = argparse.ArgumentParser(description="Run Random Walk Simulation from Config File")
@@ -1354,37 +1351,67 @@ if __name__ == "__main__":
     use_pbc = boundary_params.get('pbc', False)  # Use this variable 'use_pbc'
     check_bounds = boundary_params.get('check_bounds', False) if not use_pbc else False  # Use 'check_bounds'
 
-
     # CTRW and Alpha Params
     ctrw_config = config.get('ctrw', {})
     use_ctrw = ctrw_config.get('enabled', False)
     selected_alpha_func = None
     alpha_params = {}
-    if use_ctrw:
-        alpha_config_section = ctrw_config.get('alpha_config', {})
-        alpha_type = alpha_config_section.get('type', 'constant')  # Default to constant if unspecified
-        alpha_params = alpha_config_section.get('params', {})
-        if alpha_type not in AVAILABLE_ALPHA_FUNCTIONS:
+    alpha_type = 'N/A'
+    ctrw_config = config.get('ctrw', {})
+    use_ctrw = ctrw_config.get('enabled', False)
+    selected_alpha_func = None  # Will be populated below if use_ctrw is True
+    alpha_params = {}
+    alpha_type = 'N/A'  # Default value, will be updated below if use_ctrw is True
+
+    # === CORRECTED BLOCK START ===
+    if use_ctrw:  # Correctly check the boolean variable
+        # Look for 'alpha_function' section as defined in your YAML
+        alpha_function_section = ctrw_config.get('alpha_function', {})
+        if not alpha_function_section:
+            print("Warning: CTRW is enabled, but 'alpha_function' section is missing or empty in config.")
+        else:
+            # Get type and params from the 'alpha_function' section
+            alpha_type = alpha_function_section.get('type', 'N/A')  # Get type, default to 'N/A' if missing
+            alpha_params = alpha_function_section.get('params', {})
+
+            # Validate the retrieved alpha_type
+            if alpha_type not in AVAILABLE_ALPHA_FUNCTIONS:
+                print(
+                    f"Error: Unknown or missing alpha function type '{alpha_type}' in config. Available: {list(AVAILABLE_ALPHA_FUNCTIONS.keys())}")
+                # Optionally set use_ctrw back to False or exit
+                use_ctrw = False  # Safer to disable CTRW if type is invalid
+                alpha_type = 'N/A'  # Reset type if invalid
+                # import sys; sys.exit(1) # Or exit if preferred
+            else:
+                # If type is valid, store the function object (optional here, as it's passed later)
+                selected_alpha_func = AVAILABLE_ALPHA_FUNCTIONS[alpha_type]
+                print(f"  Successfully read alpha function type: {alpha_type}")  # Add confirmation
+    # === CORRECTED BLOCK END ===
+
+
+    # Disorder Params and Mode Determination
+    disorder_config = config.get('disorder', {})
+    disorder_type = disorder_config.get('type', 'none')
+    disorder_params = disorder_config.get('params', {})
+    selected_disorder_func = None
+    disorder_mode = 'none'  # Default
+
+    if disorder_type != 'none':
+        if disorder_type in AVAILABLE_STANDARD_DISORDER_FUNCTIONS:
+            selected_disorder_func = AVAILABLE_STANDARD_DISORDER_FUNCTIONS[disorder_type]
+            disorder_mode = 'standard'
+        elif disorder_type in AVAILABLE_DIRECTION_DISORDER_FUNCTIONS:
+            selected_disorder_func = AVAILABLE_DIRECTION_DISORDER_FUNCTIONS[disorder_type]
+            disorder_mode = 'direction_only'
+            if use_ctrw:  # Disable CTRW if only directional disorder
+                print("Warning: CTRW disabled because 'direction_only' disorder mode selected.")
+                use_ctrw = False
+        else:
             print(
-                f"Error: Unknown alpha function type '{alpha_type}'. Available: {list(AVAILABLE_ALPHA_FUNCTIONS.keys())}")
+                f"Error: Unknown disorder type '{disorder_type}'. Available: {list(ALL_AVAILABLE_DISORDER_FUNCTIONS.keys())}")
             import sys;
 
             sys.exit(1)
-        selected_alpha_func = AVAILABLE_ALPHA_FUNCTIONS[alpha_type]
-        # Note: We don't add 'ctrw_alpha' to disorder_params anymore,
-        # it's handled by the selected_alpha_func and alpha_params
-
-    # Disorder Params
-    disorder_config = config.get('disorder', {})
-    disorder_type = disorder_config.get('type', 'none')  # Use this variable 'disorder_type'
-    disorder_params = disorder_config.get('params', {})
-    if disorder_type not in AVAILABLE_DISORDER_FUNCTIONS:
-        print(
-            f"Error: Unknown disorder type '{disorder_type}' in config. Available: {list(AVAILABLE_DISORDER_FUNCTIONS.keys())}")
-        import sys;
-
-        sys.exit(1)
-    selected_disorder_func = AVAILABLE_DISORDER_FUNCTIONS[disorder_type]
 
 
     # Animation Params
@@ -1407,10 +1434,10 @@ if __name__ == "__main__":
     print(f"  dt: {dt}, Step Size: {step_size}")
     print(f"  Grid: {grid_size}x{grid_size} from {grid_min} to {grid_max}")
     print(f"  Boundaries: PBC={use_pbc}, CheckBounds={check_bounds}")
-    print(f"  Disorder: Type='{disorder_type}', Params={disorder_params}")
+    print(f"  Disorder: Mode='{disorder_mode}', Type='{disorder_type}', Params={disorder_params}")
     print(f"  CTRW: Enabled={use_ctrw}")
-    if use_ctrw:
-        print(f"    Alpha Function: Type='{alpha_type}', Params={alpha_params}")
+    if use_ctrw: print(f"    Alpha Function: Type='{alpha_type}', Params={alpha_params}")
+
     print("-" * 30)
     print(f"  Animation: Run={run_animation}, Save={save_animation}")
     print(f"  Histograms: Run={run_histograms}, Steps={hist_steps_to_plot}")
@@ -1426,20 +1453,14 @@ if __name__ == "__main__":
     print(f"\n--- Running Parallel Simulation ({trials} Trials) ---")
     # *** Use local variables loaded from config, NOT args.***
     avg_msd, time_axis = main_parallel(
-        num_trials_total=trials,  # Use 'trials' variable
-        num_steps=steps,  # Use 'steps' variable
-        num_walkers=walkers,  # Use 'walkers' variable
-        step=step_size,  # Use 'step_size' variable
-        dt=dt,  # Use 'dt' variable
-        disorder_function=selected_disorder_func,
+        num_trials_total=trials, num_steps=steps, num_walkers=walkers, step=step_size, dt=dt,
+        disorder_type=disorder_type,  # Pass type name
         disorder_params=disorder_params,
-        alpha_function=selected_alpha_func,
+        alpha_type=alpha_type,  # Pass type name
         alpha_params=alpha_params,
-        xv=XV,
-        yv=YV,
-        use_ctrw_flag=use_ctrw,  # Use 'use_ctrw' variable
-        use_pbc_flag=use_pbc,  # Use 'use_pbc' variable
-        check_bounds_flag=check_bounds  # Use 'check_bounds' variable
+        disorder_mode=disorder_mode,
+        xv=XV, yv=YV, use_ctrw_flag=use_ctrw,
+        use_pbc_flag=use_pbc, check_bounds_flag=check_bounds
     )
 
     # --- Quantitative Analysis ---
@@ -1604,14 +1625,14 @@ if __name__ == "__main__":
             num_walkers=walkers,
             step=step_size, dt=dt, xv=XV, yv=YV,
             disorder_function=selected_disorder_func,
-            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,
+            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,disorder_mode=disorder_mode,
             use_ctrw=use_ctrw,
             use_pbc=use_pbc,
             check_bounds=check_bounds,
             store_history=True
         )
         use_disorder_anim = (selected_disorder_func is not None)
-        rw_anim.trajectories(use_disorder=use_disorder_anim)
+        rw_anim.trajectories()
         rw_anim.animate_trajectory(
             walker_index=anim_walker,  # Use 'anim_walker'
             save_animation=save_animation,  # Use 'save_animation'
@@ -1630,12 +1651,12 @@ if __name__ == "__main__":
             num_steps=hist_run_steps,
             num_walkers=walkers, step=step_size, dt=dt, xv=XV, yv=YV,
             disorder_function=selected_disorder_func,
-            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,
+            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,disorder_mode=disorder_mode,
             use_ctrw=use_ctrw, use_pbc=use_pbc, check_bounds=check_bounds,
             store_history=True
         )
         use_disorder_hist = (selected_disorder_func is not None)
-        rw_hist.trajectories(use_disorder=use_disorder_hist)
+        rw_hist.trajectories()
         print("Generating Histograms...")
         for step_to_plot in hist_steps_to_plot:  # Use 'hist_steps_to_plot'
             if step_to_plot <= hist_run_steps:
