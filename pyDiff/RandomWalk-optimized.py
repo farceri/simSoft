@@ -1470,8 +1470,9 @@ if __name__ == "__main__":
         print("=" * 30)
 
         # Define fit range (e.g., last half of the data, avoiding first few points)
-        min_fit_step = max(10, steps // 3)  # Start fit from step 10 or halfway, whichever is later
-        max_fit_step = steps
+        # Ensure steps is defined correctly from your config loading
+        min_fit_step = max(10, int(steps // 3))  # Use int() for safety if steps is float
+        max_fit_step = int(steps)
         print(f"Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")  # Print range once
 
         # Initialize fit results to NaN
@@ -1483,11 +1484,11 @@ if __name__ == "__main__":
         if max_fit_step > min_fit_step and len(time_axis) > max_fit_step:
             # Get indices corresponding to the step range
             idx_min = min_fit_step
-            idx_max = max_fit_step
+            idx_max = max_fit_step  # Use index corresponding to max_fit_step
             time_fit_range = time_axis[idx_min: idx_max + 1]
             msd_fit_range = avg_msd[idx_min: idx_max + 1]
 
-            # --- 1. Fit Log-Log MSD to find alpha exponent ---
+            # --- 1. Fit Log-Log MSD to find alpha exponent (Overall Fit) ---
             print("\n--- Method 1: Log-Log MSD Fit (log(MSD) vs log(t)) ---")
             valid_fit_indices_msd = (time_fit_range > 1e-15) & (msd_fit_range > 1e-15)
             if np.sum(valid_fit_indices_msd) >= 2:
@@ -1495,46 +1496,57 @@ if __name__ == "__main__":
                 log_msd = np.log(msd_fit_range[valid_fit_indices_msd])
                 try:
                     slope, intercept, r_value, p_value, std_err = stats.linregress(log_time_msd, log_msd)
-                    fitted_alpha_msd = slope
-                    fit_intercept_msd = intercept  # log(C)
-                    print(f"  Estimated Alpha (Slope) = {fitted_alpha_msd:.4f}")
-                    print(f"  Standard Error          = {std_err:.4f}")
-                    print(f"  R-squared               = {r_value ** 2:.4f}")
+                    fitted_alpha_msd = slope  # Store overall alpha
+                    fit_intercept_msd = intercept  # Store overall intercept (log(C))
+                    print(f"  Estimated Overall Alpha (Slope) = {fitted_alpha_msd:.4f}")
+                    print(f"  Standard Error                  = {std_err:.4f}")
+                    print(f"  R-squared                       = {r_value ** 2:.4f}")
                 except Exception as e:
                     print(f"  Error during log-log MSD fit: {e}")
+                    fitted_alpha_msd = np.nan  # Ensure NaN on error
+                    fit_intercept_msd = np.nan
             else:
                 print(f"  Not enough valid data points ({np.sum(valid_fit_indices_msd)}) for log-log MSD fit.")
 
             # --- 2. Fit Log-Log MSD/Time to find alpha-1 exponent ---
             print("\n--- Method 2: Log-Log MSD/Time Fit (log(MSD/t) vs log(t)) ---")
-            msd_over_time_fit_range = msd_fit_range / time_fit_range  # Calculate MSD/t for the range
-            valid_fit_indices_msd_t = (time_fit_range > 1e-15) & (msd_over_time_fit_range > 1e-15)  # Check MSD/t > 0
-            if np.sum(valid_fit_indices_msd_t) >= 2:
-                log_time_msd_t = np.log(time_fit_range[valid_fit_indices_msd_t])
-                log_msd_over_time = np.log(msd_over_time_fit_range[valid_fit_indices_msd_t])
-                try:
-                    slope_alpha_minus_1, intercept_b, r_value_b, p_value_b, std_err_b = stats.linregress(log_time_msd_t,
-                                                                                                         log_msd_over_time)
-                    # Implied alpha = slope + 1
-                    fitted_alpha_msd_t = slope_alpha_minus_1 + 1.0
-                    print(f"  Estimated Alpha-1 (Slope) = {slope_alpha_minus_1:.4f}")
-                    print(f"  Implied Alpha             = {fitted_alpha_msd_t:.4f}")
-                    print(f"  Standard Error (Slope)  = {std_err_b:.4f}")
-                    print(f"  R-squared                 = {r_value_b ** 2:.4f}")
-                except Exception as e:
-                    print(f"  Error during log-log MSD/t fit: {e}")
+            # Avoid division by zero in MSD/t calculation
+            valid_time_for_div = (time_fit_range > 1e-15)
+            if np.any(valid_time_for_div):
+                msd_over_time_fit_range = msd_fit_range[valid_time_for_div] / time_fit_range[valid_time_for_div]
+                time_for_msd_t_fit = time_fit_range[valid_time_for_div]
+                # Also check MSD/t > 0 for log
+                valid_fit_indices_msd_t = (msd_over_time_fit_range > 1e-15)
+
+                if np.sum(valid_fit_indices_msd_t) >= 2:
+                    log_time_msd_t = np.log(time_for_msd_t_fit[valid_fit_indices_msd_t])
+                    log_msd_over_time = np.log(msd_over_time_fit_range[valid_fit_indices_msd_t])
+                    try:
+                        slope_alpha_minus_1, intercept_b, r_value_b, p_value_b, std_err_b = stats.linregress(
+                            log_time_msd_t,
+                            log_msd_over_time)
+                        # Implied alpha = slope + 1
+                        fitted_alpha_msd_t = slope_alpha_minus_1 + 1.0
+                        print(f"  Estimated Alpha-1 (Slope) = {slope_alpha_minus_1:.4f}")
+                        print(f"  Implied Alpha             = {fitted_alpha_msd_t:.4f}")
+                        print(f"  Standard Error (Slope)  = {std_err_b:.4f}")
+                        print(f"  R-squared                 = {r_value_b ** 2:.4f}")
+                    except Exception as e:
+                        print(f"  Error during log-log MSD/t fit: {e}")
+                else:
+                    print(f"  Not enough valid data points ({np.sum(valid_fit_indices_msd_t)}) for log-log MSD/t fit.")
             else:
-                print(f"  Not enough valid data points ({np.sum(valid_fit_indices_msd_t)}) for log-log MSD/t fit.")
+                print(f"  Not enough valid time points > 0 in range for MSD/t calculation.")
 
         else:
-            print(f"  Fit range [{min_fit_step}, {max_fit_step}] invalid or insufficient data length.")
-
-
+            print(
+                f"  Fit range steps [{min_fit_step}, {max_fit_step}] invalid or insufficient data length ({len(time_axis)} points).")
 
         # --- 3. Calculate Effective Diffusion Coefficient ---
         print("\n--- Effective Diffusion Coefficient (D_eff = MSD / 4t) ---")
-        # Calculate D_eff over the same fit range used for alpha
+        # Recalculate D_eff over the same fit range used for alpha
         if max_fit_step > min_fit_step and len(time_axis) > max_fit_step:
+            # Use idx_min, idx_max defined earlier
             time_eff = time_axis[idx_min: idx_max + 1]
             msd_eff = avg_msd[idx_min: idx_max + 1]
             valid_eff_indices = (time_eff > 1e-15)  # Avoid division by zero
@@ -1548,7 +1560,7 @@ if __name__ == "__main__":
                 # Report D_eff at the end of the fit range
                 final_d_eff = d_eff_values[-1]
 
-                print(f"Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")
+                print(f"  Analysis Range Steps: [{min_fit_step}, {max_fit_step}]")
                 print(f"  Average D_eff in range = {avg_d_eff:.4e}")
                 print(f"  Final D_eff in range   = {final_d_eff:.4e}")
             else:
@@ -1556,15 +1568,17 @@ if __name__ == "__main__":
                 avg_d_eff = np.nan
                 final_d_eff = np.nan
         else:
-            print(f"  Fit range [{min_fit_step}, {max_fit_step}] invalid or insufficient data.")
+            # This message might be redundant if the outer check already printed
+            # print(f"  Fit range [{min_fit_step}, {max_fit_step}] invalid or insufficient data for D_eff.")
             avg_d_eff = np.nan
             final_d_eff = np.nan
 
         # --- 4. Theoretical Comparison (for ordered case) ---
-        # Calculate theoretical D for the standard ordered walk
+        # Ensure step_size and dt are defined from config loading
         D_theory_ordered = step_size ** 2 / (4 * dt)
         print("\n--- Theoretical Comparison ---")
         print(f"  Theoretical D (Ordered Walk) = {D_theory_ordered:.4e}")
+        # Ensure disorder_type and use_ctrw are defined from config loading
         if disorder_type == 'none' and not use_ctrw:
             print(f"  (Simulation matches theoretical D if Avg D_eff -> Theoretical D)")
         else:
@@ -1574,48 +1588,130 @@ if __name__ == "__main__":
 
         # --- Plotting ---
         print("--- Plotting Averaged Results ---")
+
         # Plot MSD/Time
         plt.figure(figsize=(10, 6))
-        valid_div = time_axis > 1e-15
-        if np.any(valid_div):
-            msd_over_time = avg_msd[valid_div] / time_axis[valid_div]
-            plt.plot(time_axis[valid_div], msd_over_time, label=f'MSD/Time ({disorder_type})')
-            # Add horizontal line for theoretical D*4 (only makes sense for normal diffusion)
+        valid_div_plot = time_axis > 1e-15
+        if np.any(valid_div_plot):
+            msd_over_time_plot = avg_msd[valid_div_plot] / time_axis[valid_div_plot]
+            # Ensure alpha_type is defined from config loading
+            plt.plot(time_axis[valid_div_plot], msd_over_time_plot,
+                     label=f'MSD/Time ({disorder_type}, alpha={alpha_type})')
             plt.axhline(4 * D_theory_ordered, color='r', linestyle='--', alpha=0.7,
                         label=f'4 * D_theory (Ordered) = {4 * D_theory_ordered:.2e}')
         plt.xlabel('Time (s)')
         plt.ylabel('MSD / Time')
-        plt.title(f'Avg Effective Diffusion Coefficient ({trials} Trials)')
+        plt.title(f'Avg Effective Diffusion Coefficient ({trials} Trials)')  # Ensure trials is defined
         plt.grid(True)
         plt.legend()
         plt.show()
 
         # Plot Log-Log MSD
         plt.figure(figsize=(10, 6))
-        valid_log = (time_axis > 1e-15) & (avg_msd > 1e-15)
-        if np.any(valid_log):
-            plt.loglog(time_axis[valid_log], avg_msd[valid_log], label=f'MSD ({disorder_type})')
-            # Plot theoretical line
-            slope_1_line = 4 * D_theory_ordered * time_axis[valid_log]
-            plt.loglog(time_axis[valid_log], slope_1_line, 'r--', alpha=0.7,
-                       label=f'Slope=1 (Theory D={D_theory_ordered:.2e})')
-            # Plot the fitted line if fit was successful
-            if not np.isnan(fitted_alpha_msd) and not np.isnan(fit_intercept_msd):
-                # Calculate fitted line: MSD = exp(intercept) * t^alpha
-                fit_line_msd = np.exp(fit_intercept_msd) * (time_axis[valid_log] ** fitted_alpha_msd)
-                plt.loglog(time_axis[valid_log], fit_line_msd, 'g:', alpha=0.9, linewidth=2,
-                           label=f'Fit (alpha={fitted_alpha_msd:.3f})')
+        # Filter for valid log values right at the start
+        valid_log_plot = (time_axis > 1e-15) & (avg_msd > 1e-15)
+        time_axis_valid_plot = time_axis[valid_log_plot]
+        avg_msd_valid_plot = avg_msd[valid_log_plot]
+        log_time_full_plot = np.log(time_axis_valid_plot)
+        log_msd_full_plot = np.log(avg_msd_valid_plot)
 
-        plt.xlabel('Time (s)')
-        plt.ylabel('MSD')
-        plt.title(f'Avg Mean Squared Displacement (Log-Log, {trials} Trials)')
-        plt.grid(True, which='both');
-        plt.legend()
-        plt.show()
+        if np.any(valid_log_plot):
+            n_points_plot = len(time_axis_valid_plot)  # Number of valid points for plotting
+
+            # Plot the actual MSD data first
+            plt.loglog(time_axis_valid_plot, avg_msd_valid_plot, 'o', markersize=3, alpha=0.6,
+                       label=f'MSD Data ({disorder_type}, alpha={alpha_type})')
+
+            # Plot theoretical line (Slope=1)
+            slope_1_line = 4 * D_theory_ordered * time_axis_valid_plot
+            plt.loglog(time_axis_valid_plot, slope_1_line, 'r--', alpha=0.7,
+                       label=f'Slope=1 (Theory D={D_theory_ordered:.2e})')
+
+            # --- Conditional Fitting for Plotting---
+            # Ensure use_ctrw and alpha_type are defined from config loading
+            if use_ctrw and alpha_type in ['gaussian', 'linear_gradient']:
+                print(f"--- Plotting Two Log-Log Fits for {alpha_type} alpha ---")
+
+                # --- Define Plot Fit Ranges (Based on valid plot points) ---
+                # Short time: e.g., from index 5 to 10% of points (min 10 points)
+                start_short_plot = 0
+                end_short_plot = max(start_short_plot + 9, n_points_plot // 5000)  # Ensure at least 10 points if possible
+                # Long time: e.g., from 50% of points to the end (min 10 points)
+                start_long_plot = max(n_points_plot // 100, end_short_plot + 1)  # Ensure no overlap
+                end_long_plot = n_points_plot - 1
+
+                # --- Fit 1: Short Time ---
+                # Check if range is valid within the plotted data
+                if start_short_plot <= end_short_plot and (
+                        end_short_plot - start_short_plot) >= 1:  # Need at least 2 points for fit
+                    try:
+                        slope_short, intercept_short, r_short, p_short, stderr_short = stats.linregress(
+                            log_time_full_plot[start_short_plot:end_short_plot + 1],
+                            log_msd_full_plot[start_short_plot:end_short_plot + 1]
+                        )
+                        fitted_alpha_short = slope_short
+                        # Use the valid time axis subset for plotting the line
+                        time_short_range_plot = time_axis_valid_plot[start_short_plot:end_short_plot + 1]
+                        fit_line_short = np.exp(intercept_short) * (time_short_range_plot ** fitted_alpha_short)
+                        plt.loglog(time_short_range_plot, fit_line_short, 'g-', linewidth=2,
+                                   label=f'Short Time Fit (α={fitted_alpha_short:.3f})')
+                        print(f"  Plotting Short Time Fit (indices {start_short_plot}-{end_short_plot})")
+                    except Exception as e:
+                        print(f"  Error during short time fit for plot: {e}")
+                else:
+                    print(
+                        f"  Not enough points for short time fit plot (Range indices: {start_short_plot}-{end_short_plot}, Available: {n_points_plot})")
+
+                # --- Fit 2: Long Time ---
+                # Check if range is valid within the plotted data
+                if start_long_plot <= end_long_plot and (
+                        end_long_plot - start_long_plot) >= 1:  # Need at least 2 points for fit
+                    try:
+                        slope_long, intercept_long, r_long, p_long, stderr_long = stats.linregress(
+                            log_time_full_plot[start_long_plot:end_long_plot + 1],
+                            log_msd_full_plot[start_long_plot:end_long_plot + 1]
+                        )
+                        fitted_alpha_long = slope_long
+                        # Use the valid time axis subset for plotting the line
+                        time_long_range_plot = time_axis_valid_plot[start_long_plot:end_long_plot + 1]
+                        fit_line_long = np.exp(intercept_long) * (time_long_range_plot ** fitted_alpha_long)
+                        plt.loglog(time_long_range_plot, fit_line_long, 'm--', linewidth=2,
+                                   label=f'Long Time Fit (α={fitted_alpha_long:.3f})')
+                        print(f"  Plotting Long Time Fit (indices {start_long_plot}-{end_long_plot})")
+                    except Exception as e:
+                        print(f"  Error during long time fit for plot: {e}")
+                else:
+                    print(
+                        f"  Not enough points for long time fit plot (Range indices: {start_long_plot}-{end_long_plot}, Available: {n_points_plot})")
+
+            else:
+                # --- Original Single Fit Plotting Logic ---
+                print("--- Plotting Single Overall Log-Log Fit ---")
+                # Use the overall fit results calculated in the analysis section
+                if not np.isnan(fitted_alpha_msd) and not np.isnan(fit_intercept_msd):
+                    # Calculate fitted line over the whole valid range
+                    fit_line_msd_plot = np.exp(fit_intercept_msd) * (time_axis_valid_plot ** fitted_alpha_msd)
+                    plt.loglog(time_axis_valid_plot, fit_line_msd_plot, 'g:', alpha=0.9, linewidth=2,
+                               label=f'Overall Fit (α={fitted_alpha_msd:.3f})')
+                    print(f"  Plotting Overall Fit (alpha = {fitted_alpha_msd:.4f})")
+                else:
+                    print("  Overall fit calculation failed or skipped, not plotted.")
+
+            # --- Final Plot Settings ---
+            plt.xlabel('Time (s)')
+            plt.ylabel('MSD')
+            plt.title(f'Avg Mean Squared Displacement (Log-Log, {trials} Trials)')  # Ensure trials defined
+            plt.grid(True, which='both');
+            plt.legend()
+            plt.show()
+
+        else:
+            print("No valid data points for log-log plotting.")
 
     else:
         print("Parallel simulation failed or produced no results, skipping analysis and plotting.")
 
+    # --- End of the main analysis and plotting block ---
     # --- Optional: Run Single Trial for Animation ---
     # *** Use local variables loaded from config ***
     if run_animation:
