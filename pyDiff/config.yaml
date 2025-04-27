@@ -39,10 +39,10 @@ ctrw:
     type: gaussian
     # Parameters specific to the chosen alpha function type
     params:
-      center_alpha: 0.5
-      edge_alpha: 0.9
-      sigma: 0.3
-      #value: 0.7 # For constant_alpha
+      #center_alpha: 0.5
+      #edge_alpha: 0.9
+      #sigma: 0.3
+      value: 0.7 # For constant_alpha
       #min_alpha: 0.3 # For linear_gradient_alpha
       #max_alpha: 0.9 # For linear_gradient_alpha
       #direction: 'x' # o 'y' For linear_gradient_alpha
