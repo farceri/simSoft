@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-
+import  numba
+import time as timer
 
 '''
 Created on May 13 2025, by Luca Sfriso
@@ -14,165 +15,201 @@ Usa le differenze finite con il metodo FTCS
 $\partial_{t}{p(x,t)}=D^{*}(1-frac{1}{\sqrt{2\pi}\sigma_{p}}e^{frac{-x^2}{2 \sigma_{p}^2}})\partial^2_{x}p(x,t)$
 '''
 
+# --- Control Flags ---
+run_static_plots = True  # Set to False to bypass static plots
+run_animation_flag = True  # Set to False to bypass animation generation and display
+save_animation_gif = False  # Set to True to attempt saving GIF (requires ImageMagick)
+save_animation_mp4 = False  # Set to True to attempt saving MP4 (requires FFmpeg)
 
-def solve_pde_ftcs_conservative(D_star, sigma_p, L, T, Nx, Nt):
-    """
-    Solves the PDE dp/dt = d^2/dx^2 (D(x)p(x,t)) using the FTCS method.
 
-    Parameters:
-    D_star (float): Constant D* in the diffusion coefficient.
-    sigma_p (float): Parameter sigma_p in the diffusion coefficient.
-    L (float): Length of the spatial domain [-L/2, L/2].
-    T (float): Total time for the simulation.
-    Nx (int): Number of spatial grid points.
-    Nt (int): Number of time steps.
+# --- Numba JIT-compiled function for the core simulation loop ---
+@numba.njit(cache=True)
+def _run_simulation_loops_numba(p_array, D_x_vals_array, dt_val, dx_val, Nx_val, Nt_val):
+    dx2 = dx_val * dx_val
+    dt_div_dx2 = dt_val / dx2
+    Q_current_buffer = np.empty(Nx_val, dtype=np.float64)
 
-    Returns:
-    x (numpy.ndarray): Array of spatial points.
-    t (numpy.ndarray): Array of time points.
-    p (numpy.ndarray): 2D array of the solution p(x,t).
-    D_x_vals (numpy.ndarray): Array of diffusion coefficient values D(x).
-    """
+    for j in range(0, Nt_val - 1):
+        for k in range(Nx_val):
+            Q_current_buffer[k] = D_x_vals_array[k] * p_array[k, j]
 
-    # --- Discretization ---
-    x = np.linspace(-L / 2, L / 2, Nx)
-    t = np.linspace(0, T, Nt)
+        for i in range(1, Nx_val - 1):
+            p_array[i, j + 1] = p_array[i, j] + dt_div_dx2 * \
+                                (Q_current_buffer[i + 1] - 2 * Q_current_buffer[i] + Q_current_buffer[i - 1])
+        p_array[0, j + 1] = p_array[0, j] + dt_div_dx2 * (Q_current_buffer[1] - Q_current_buffer[0])
+        p_array[Nx_val - 1, j + 1] = p_array[Nx_val - 1, j] + dt_div_dx2 * \
+                                     (Q_current_buffer[Nx_val - 2] - Q_current_buffer[Nx_val - 1])
+
+
+def solve_pde_ftcs_conservative_numba(D_star, sigma_p, L, T, Nx, Nt):
+    x = np.linspace(-L / 2, L / 2, Nx, dtype=np.float64)
+    t = np.linspace(0, T, Nt, dtype=np.float64)
     dx = x[1] - x[0]
     dt = t[1] - t[0]
 
-    # --- Diffusion Coefficient D(x) ---
     if np.isclose(sigma_p, 0):
-        print("Warning: sigma_p is effectively zero. D(x) might behave unexpectedly.")
-        D_x_vals = D_star * np.ones(Nx) # Or handle as a pure constant diffusion D*
+        D_x_vals = D_star * np.ones(Nx, dtype=np.float64)
     else:
-        gaussian_term = (1.0 / (np.sqrt(2 * np.pi) * sigma_p)) * np.exp(-x**2 / (2 * sigma_p**2))
+        gaussian_term = (1.0 / (np.sqrt(2 * np.pi) * sigma_p)) * \
+                        np.exp(-(x ** 2) / (2 * sigma_p ** 2))
         D_x_vals = D_star * (1.0 - gaussian_term)
-        # Ensure D(x) is non-negative, critical for physical meaning and stability
-        D_x_vals = np.maximum(D_x_vals, 1e-9) # Prevent D(x) = 0 if it causes issues, though max is better.
-                                         # Using a small positive number if D_x can be zero.
-                                         # Or ensure D_star * (1-gaussian_term) is always positive by choice of D_star, sigma_p
+        D_x_vals = np.maximum(D_x_vals, 1e-9)
 
-    # --- Stability Check (Courant-Friedrichs-Lewy condition) ---
-    # This condition is primarily for D*p_xx type terms.
-    # The equation p_t = (D(x)p)_xx = D_xx p + 2 D_x p_x + D p_xx
-    # The D p_xx term is usually dominant for stability.
-    alpha = np.max(D_x_vals) * dt / dx**2
+    alpha = np.max(D_x_vals) * dt / dx ** 2
     print(f"Stability parameter alpha (based on max(D(x)) dt/dx^2) = {alpha:.4f}")
     if alpha > 0.5:
         print(f"Warning: Stability condition (max(D(x)) dt/dx^2 <= 0.5) may not be met (alpha = {alpha:.4f}).")
-        print(f"Consider decreasing dt or increasing dx^2.")
-        print(f"Required dt <= {0.5 * dx**2 / np.max(D_x_vals):.2e} for current dx and max(D_x).")
 
-    # --- Initialization ---
-    p = np.zeros((Nx, Nt))
-
-    # Initial condition: Dirac delta centered at x=0
+    p = np.zeros((Nx, Nt), dtype=np.float64)
     center_index = np.argmin(np.abs(x - 0.0))
     p[center_index, 0] = 1.0 / dx
-    # Ensure the rest are zero for t=0
-    # This is implicitly handled by np.zeros, but being explicit for p[center_index,0] is key.
 
-
-    # --- Time Stepping (FTCS for conservative form) ---
-    # Pre-calculate Q = D(x)p(x,t) at each step for clarity, or do it inline
-    Q = np.zeros(Nx)
-
-    for j in range(0, Nt - 1):  # Time loop
-        # Calculate Q_i^j = D_i * p_i^j for all i at current time j
-        Q_current = D_x_vals * p[:, j]
-
-        # Interior points
-        for i in range(1, Nx - 1):
-            p[i, j + 1] = p[i, j] + (dt / dx**2) * \
-                          (Q_current[i+1] - 2*Q_current[i] + Q_current[i-1])
-
-        # Boundary Conditions (Zero Flux: J = d(Dp)/dx = 0)
-        # Based on finite volume: dp/dt = (J_inner - J_outer)/dx
-        # J_outer = 0 at domain boundaries.
-
-        # At i = 0 (left boundary): J_outer (J_{-1/2}) = 0
-        # dp0/dt = J_{1/2}/dx = ( (Dp)_1 - (Dp)_0 ) / dx^2
-        p[0, j + 1] = p[0, j] + (dt / dx**2) * (Q_current[1] - Q_current[0])
-
-        # At i = Nx-1 (right boundary): J_outer (J_{Nx-1/2}) = 0
-        # dp_{Nx-1}/dt = -J_{Nx-3/2}/dx = -( (Dp)_{Nx-1} - (Dp)_{Nx-2} ) / dx^2
-        #              = ( (Dp)_{Nx-2} - (Dp)_{Nx-1} ) / dx^2
-        p[Nx - 1, j + 1] = p[Nx - 1, j] + (dt / dx**2) * \
-                           (Q_current[Nx-2] - Q_current[Nx-1])
-
+    _run_simulation_loops_numba(p, D_x_vals, dt, dx, Nx, Nt)
     return x, t, p, D_x_vals
 
-# --- Simulation Parameters (using your last successful set for stability) ---
+
+# --- Simulation Parameters ---
 D_star_val = 1.0
-sigma_p_val = 0.1
+sigma_p_val = 0.4
 L_val = 2.0
 T_val = 1.0
-Nx_val = 2001
-Nt_val = 10000000 # This Nt should be sufficient for stability given previous alpha ~ 0.22
+Nx_val = 101
+Nt_val = 10000  # Using a larger value for a more detailed simulation
 
 # --- Run the simulation ---
-x_sol, t_sol, p_sol, Dx_plot = solve_pde_ftcs_conservative(D_star_val, sigma_p_val, L_val, T_val, Nx_val, Nt_val)
+print("Running simulation with Numba...")
+start_time = timer.time()
+x_sol, t_sol, p_sol, Dx_plot = solve_pde_ftcs_conservative_numba(D_star_val, sigma_p_val, L_val, T_val, Nx_val, Nt_val)
+end_time = timer.time()
+print(f"Simulation completed in {end_time - start_time:.4f} seconds.")
 
-# --- Plotting D(x) ---
-plt.figure(figsize=(12, 12)) # Increased height for the new integral plot
+# --- Static Plots (conditionally) ---
+if run_static_plots:
+    print("Generating static plots...")
+    plt.figure(figsize=(12, 12))
+    plt.subplot(4, 1, 1)
+    plt.plot(x_sol, Dx_plot)
+    plt.title(f'Diffusion Coefficient D(x) (D*={D_star_val}, $\sigma_p$={sigma_p_val})')
+    plt.xlabel('x');
+    plt.ylabel('D(x)');
+    plt.grid(True)
 
-plt.subplot(4, 1, 1) # Changed to 4 rows
-plt.plot(x_sol, Dx_plot)
-plt.title(f'Diffusion Coefficient D(x) (D*={D_star_val}, $\sigma_p$={sigma_p_val})')
-plt.xlabel('x')
-plt.ylabel('D(x)')
-plt.grid(True)
+    plt.subplot(4, 1, 2)
+    time_indices_to_plot = [0, int(Nt_val * 0.1), int(Nt_val * 0.2), int(Nt_val * 0.5), Nt_val - 1]
+    for k, time_idx in enumerate(time_indices_to_plot):
+        if time_idx < Nt_val:
+            plt.plot(x_sol, p_sol[:, time_idx], label=f't = {t_sol[time_idx]:.2f}')
+    plt.title('Concentration p(x,t) at different times (Conservative form, Numba)')
+    plt.xlabel('x');
+    plt.ylabel('p(x,t)');
+    plt.legend();
+    plt.grid(True)
 
-# --- Plotting the solution p(x,t) ---
-plt.subplot(4, 1, 2) # Changed to 4 rows
-time_indices_to_plot = [0, int(Nt_val / 10), int(Nt_val / 5), int(Nt_val / 2), Nt_val - 1]
-for k, time_idx in enumerate(time_indices_to_plot):
-    # Check if time_idx is within bounds
-    if time_idx < Nt_val:
-        plt.plot(x_sol, p_sol[:, time_idx], label=f't = {t_sol[time_idx]:.2f}')
-plt.title('Concentration p(x,t) at different times (Conservative form)')
-plt.xlabel('x')
-plt.ylabel('p(x,t)')
-plt.legend()
-plt.grid(True)
+    ax_3d = plt.subplot(4, 1, 3, projection='3d')
+    X_grid, T_grid = np.meshgrid(x_sol, t_sol)
+    P_grid = p_sol.T
+    stride_t = max(1, Nt_val // 100);
+    stride_x = max(1, Nx_val // 50)
+    surf = ax_3d.plot_surface(X_grid[::stride_t, ::stride_x], T_grid[::stride_t, ::stride_x],
+                              P_grid[::stride_t, ::stride_x], cmap='viridis', edgecolor='none')
+    ax_3d.set_title('Surface plot of p(x,t)');
+    ax_3d.set_xlabel('x');
+    ax_3d.set_ylabel('t');
+    ax_3d.set_zlabel('p(x,t)')
 
-# --- Surface plot of p(x,t) ---
-ax_3d = plt.subplot(4, 1, 3, projection='3d') # Changed to 4 rows
-X_grid, T_grid = np.meshgrid(x_sol, t_sol)
-P_grid = p_sol.T
-stride_t = max(1, Nt_val // 50)
-stride_x = max(1, Nx_val // 50)
-surf = ax_3d.plot_surface(X_grid[::stride_t, ::stride_x], T_grid[::stride_t, ::stride_x], P_grid[::stride_t, ::stride_x], cmap='viridis', edgecolor='none')
-ax_3d.set_title('Surface plot of p(x,t)')
-ax_3d.set_xlabel('x')
-ax_3d.set_ylabel('t')
-ax_3d.set_zlabel('p(x,t)')
+    plt.subplot(4, 1, 4)
+    integral_p = np.zeros(Nt_val)
+    dx_val = x_sol[1] - x_sol[0]
+    for j_idx in range(Nt_val):
+        integral_p[j_idx] = np.sum(p_sol[:, j_idx]) * dx_val
+    plt.plot(t_sol, integral_p)
+    plt.title('Integral of p(x,t) over x vs. Time (Conservation Check)')
+    plt.xlabel('Time t');
+    plt.ylabel('$\int p(x,t) dx$')
+    min_integral_val = np.min(integral_p);
+    max_integral_val = np.max(integral_p)  # Renamed to avoid conflict
+    if min_integral_val > 0 and max_integral_val > 0:
+        plt.ylim(min(0.95, 0.99 * min_integral_val), max(1.05, 1.01 * max_integral_val))
+    else:
+        plt.ylim(0.0, 1.5 if max_integral_val < 1.5 else max_integral_val * 1.1)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    print(f"Initial integral of p: {integral_p[0]:.6f}")
+    print(f"Final integral of p: {integral_p[-1]:.6f}")
+    print(f"Mean integral: {np.mean(integral_p):.6f}, Std dev: {np.std(integral_p):.6e}")
+else:
+    print("Static plots bypassed.")
+
+# --- Animation Setup (conditionally) ---
+if run_animation_flag:
+    print("Setting up animation...")
+    # Use fewer frames for animation if Nt_val is large for faster generation/display
+    animation_display_frames = 200  # Number of frames to display/save in the animation
+    if Nt_val < animation_display_frames:  # Ensure we don't try to make more frames than available time steps
+        animation_display_frames = Nt_val
+    frame_step = max(1, Nt_val // animation_display_frames)
+
+    fig_anim, ax_anim = plt.subplots()
+    line, = ax_anim.plot(x_sol, p_sol[:, 0], lw=2)
+    ax_anim.set_xlabel('x')
+    ax_anim.set_ylabel('p(x,t)')
+    ax_anim.set_title('Time evolution of p(x,t) (Numba optimized)')
+    ax_anim.grid(True)
+
+    # Dynamic y-axis limit setting
+    y_max_anim = 0
+    if Nt_val > 1:
+        # Find max p value after the initial peak (e.g. after first 1% of steps, or at least 1 step)
+        start_idx_for_ymax = min(max(1, Nt_val // 100), Nt_val - 1)
+        y_max_anim = np.max(p_sol[:, start_idx_for_ymax:]) * 1.1
+    if y_max_anim <= 0:  # Fallback if all values are zero or negative (unlikely)
+        y_max_anim = np.max(p_sol[:, 0]) * 0.2 if np.max(p_sol[:, 0]) > 0 else 1.0
+    ax_anim.set_ylim(0, y_max_anim)
+
+    time_text = ax_anim.text(0.05, 0.9, '', transform=ax_anim.transAxes)
 
 
-# --- Check conservation of total probability (integral of p(x,t) over x) ---
-plt.subplot(4, 1, 4) # Changed to 4 rows
-integral_p = np.zeros(Nt_val)
-dx_val = x_sol[1] - x_sol[0]
-for j in range(Nt_val):
-    integral_p[j] = np.sum(p_sol[:, j]) * dx_val
+    def init_animation():
+        line.set_ydata(p_sol[:, 0])
+        time_text.set_text('')
+        return line, time_text
 
-plt.plot(t_sol, integral_p)
-plt.title('Integral of p(x,t) over x vs. Time (Conservation Check)')
-plt.xlabel('Time t')
-plt.ylabel('$\int p(x,t) dx$')
-# Set y-limits around 1.0 for better visualization of conservation
-min_integral = np.min(integral_p)
-max_integral = np.max(integral_p)
-if min_integral > 0 and max_integral > 0 : # Check if integral values are valid
-    plt.ylim(min(0.9, 0.98 * min_integral), max(1.1, 1.02 * max_integral))
-else: # Fallback if integrals are zero or negative (should not happen with proper IC)
-    plt.ylim(0.0, 1.5 if max_integral < 1.5 else max_integral * 1.1)
 
-plt.grid(True)
+    animation_frame_indices = range(0, Nt_val, frame_step)
+    actual_num_animation_frames = len(animation_frame_indices)
 
-plt.tight_layout()
-plt.show()
 
-print(f"Initial integral of p: {integral_p[0]:.6f}")
-print(f"Final integral of p: {integral_p[-1]:.6f}")
-print(f"Mean integral: {np.mean(integral_p):.6f}, Std dev: {np.std(integral_p):.6e}")
+    def animate(i_anim_frame):
+        actual_time_index = animation_frame_indices[i_anim_frame]
+        line.set_ydata(p_sol[:, actual_time_index])
+        time_text.set_text(
+            f'Time = {t_sol[actual_time_index]:.3f} s (Frame {i_anim_frame + 1}/{actual_num_animation_frames})')
+        return line, time_text
+
+
+    ani = animation.FuncAnimation(fig_anim, animate, frames=actual_num_animation_frames,
+                                  init_func=init_animation, blit=True, interval=50, repeat=False)
+    plt.show()  # Display the animation
+
+    if save_animation_gif:
+        print("Attempting to save GIF...")
+        try:
+            ani.save('diffusion_animation_numba.gif', writer='pillow',
+                     fps=15)  # 'pillow' is a good alternative to 'imagemagick'
+            print("GIF saved as diffusion_animation_numba.gif")
+        except Exception as e:
+            print(f"Could not save GIF: {e}")
+            print("Make sure Pillow is installed (`pip install Pillow`) or ImageMagick is available.")
+
+    if save_animation_mp4:
+        print("\nAttempting to save MP4...")
+        try:
+            ani.save('diffusion_animation_numba.mp4', writer='ffmpeg', fps=15, dpi=150)
+            print("MP4 saved as diffusion_animation_numba.mp4")
+        except Exception as e:
+            print(f"Could not save MP4: {e}")
+            print("Make sure FFmpeg is installed and in your PATH.")
+else:
+    print("Animation bypassed.")
