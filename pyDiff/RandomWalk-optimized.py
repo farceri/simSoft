@@ -1735,7 +1735,6 @@ if __name__ == "__main__":
             filename=anim_filename  # Use 'anim_filename'
         )
 
-
     # --- Optional: Run Single Trial for Histograms ---
     # *** Use local variables loaded from config ***
     if run_histograms and hist_steps_to_plot:
@@ -1743,15 +1742,36 @@ if __name__ == "__main__":
         max_hist_step = max(hist_steps_to_plot) if hist_steps_to_plot else 0
         # Ensure simulation runs long enough for both main analysis AND histograms
         hist_run_steps = max(steps, max_hist_step)
+
+        # Ensure 'alpha_type' is defined in this scope, loaded from your config.
+        # It was defined in your main section:
+        # if use_ctrw:
+        #     alpha_function_section = ctrw_config.get('alpha_function', {})
+        #     alpha_type = alpha_function_section.get('type', 'N/A')
+        #     alpha_params = alpha_function_section.get('params', {})
+        # else:
+        #     alpha_type = 'N/A' # Or some default if use_ctrw is false
+        #     alpha_params = {}
+
         rw_hist = RandomWalk(
             num_steps=hist_run_steps,
-            num_walkers=walkers, step=step_size, dt=dt, xv=XV, yv=YV,
+            num_walkers=walkers,
+            step=step_size,
+            dt=dt,
+            xv=XV,
+            yv=YV,
             disorder_function=selected_disorder_func,
-            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,disorder_mode=disorder_mode,
-            use_ctrw=use_ctrw, use_pbc=use_pbc, check_bounds=check_bounds,
+            disorder_params=disorder_params,
+            # REMOVE: alpha_function=selected_alpha_func,
+            alpha_type=alpha_type,  # CORRECT: Pass the string 'alpha_type'
+            alpha_params=alpha_params,
+            disorder_mode=disorder_mode,
+            use_ctrw=use_ctrw,
+            use_pbc=use_pbc,
+            check_bounds=check_bounds,
             store_history=True
         )
-        use_disorder_hist = (selected_disorder_func is not None)
+        # use_disorder_hist = (selected_disorder_func is not None) # This line seems okay
         rw_hist.trajectories()
         print("Generating Histograms...")
         for step_to_plot in hist_steps_to_plot:  # Use 'hist_steps_to_plot'
@@ -1762,6 +1782,3 @@ if __name__ == "__main__":
         plt.show()
 
     print("\nSimulation Finished.")
-
-
-
