@@ -10,7 +10,7 @@ import argparse # Import argparse
 import yaml
 import traceback
 
-from simSoft.pyDiff.vectorized_disorder_funcs import uniform_landscape_per_trial_vectorized
+
 
 '''
 
