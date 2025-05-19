@@ -12,18 +12,21 @@ grid:
 
 boundaries:
   pbc: false          # Use Periodic Boundary Conditions?
-  check_bounds: false # Check if walkers leave grid? (Ignored if pbc is true)
+  check_bounds: true # Check if walkers leave grid? (Ignored if pbc is true)
 
 disorder:
   # Type must be one of the keys in AVAILABLE_DISORDER_FUNCTIONS in the script
-  # e.g., none, gaussian, uniform, plateau, ,etc.
-  type: gaussian
+  # e.g., none, gaussian, uniform, plateau, gaussian_per_trial ,etc.
+  type: gaussian_per_trial
   # Parameters specific to the chosen disorder type
   # Only parameters relevant to 'type' above will be used
   params:
+    mean_rest_prob: 0      # Example: Average resting probability
+    std_dev_rest_prob: 0.15   # Example: Standard deviation for the draw
+    max_allowed_rest_prob: 0.9 # Example: Max P_rest, ensures movement possible
     #strength: 0.7 #For bias toward origin and vortex
-    sigma: 0.4
-    max_rest_strength: 0.5 # For gaussian
+    #sigma: 0.4
+    #max_rest_strength: 0.5 # For gaussian
     #rest_level: 0.2       # For uniform
     # plateau_radius: 0.1   # For plateau
     # max_rest: 0.8         # For plateau, exp, multi_center
@@ -36,13 +39,13 @@ ctrw:
   alpha_function:
     # Type must be a key in AVAILABLE_ALPHA_FUNCTIONS in the script
     # Examples: constant, gaussian, linear_gradient
-    type: gaussian
+    type: constant
     # Parameters specific to the chosen alpha function type
     params:
       #center_alpha: 0.5
       #edge_alpha: 0.9
       #sigma: 0.3
-      #value: 0.7 # For constant_alpha
+      value: 0.7 # For constant_alpha
       #min_alpha: 0.3 # For linear_gradient_alpha
       #max_alpha: 0.9 # For linear_gradient_alpha
       #direction: 'x' # o 'y' For linear_gradient_alpha
@@ -55,6 +58,6 @@ animation:
   filename: 'walk_animation.gif' # Used only if save is true
 
 histograms:
-  enabled: true
+  enabled: false
   # List of simulation steps (integers) to generate histograms for
   steps_to_plot: [1000, 10000, 100000]

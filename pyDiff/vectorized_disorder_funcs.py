@@ -463,3 +463,54 @@ def vortex_flow(x, y, strength=0.8, **kwargs):
     probs /= prob_sum
 
     return probs.astype(np.float32)
+
+def gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0.2, std_dev_rest_prob=0.1, max_allowed_rest_prob=0.95):
+    """
+    Generates a landscape of resting probabilities where each grid cell's
+    resting probability is drawn from a Gaussian distribution.
+    This landscape is generated per trial due to trial-specific random seeding.
+
+    Args:
+        xv (np.ndarray): Meshgrid for x-coordinates.
+        yv (np.ndarray): Meshgrid for y-coordinates.
+        mean_rest_prob (float): Mean of the Gaussian distribution for resting probability.
+        std_dev_rest_prob (float): Standard deviation of the Gaussian distribution.
+        max_allowed_rest_prob (float): Maximum allowed resting probability (e.g., 0.95)
+                                     to ensure walkers can always move.
+
+    Returns:
+        np.ndarray: A (ny, nx, 5) array of probabilities [P+x, P-x, P+y, P-y, Prest].
+    """
+    ny, nx = xv.shape
+
+    # 1. Draw resting probabilities from a Gaussian distribution for each cell
+    # Since np.random.seed() is called per trial, this draw will be unique per trial.
+    raw_resting_probs = np.random.normal(loc=mean_rest_prob, scale=std_dev_rest_prob, size=(ny, nx))
+
+    # 2. Clip the resting probabilities to be within [0, max_allowed_rest_prob]
+    # This ensures probabilities are valid and that there's always some chance to move.
+    clipped_resting_probs = np.clip(raw_resting_probs, 0.0, max_allowed_rest_prob)
+
+    # 3. Calculate the remaining probability available for movement
+    probability_for_movement = 1.0 - clipped_resting_probs
+
+    # 4. Distribute the movement probability equally among the four directions
+    # Ensure prob_each_direction is not negative (though clipping Prest should prevent this)
+    prob_each_direction = np.maximum(0.0, probability_for_movement / 4.0)
+
+    # 5. Construct the output probability array
+    # Shape: (ny, nx, 5) for [P+x, P-x, P+y, P-y, Prest]
+    output_probs = np.zeros((ny, nx, 5), dtype=np.float32)
+    output_probs[..., 0] = prob_each_direction  # P_plus_x
+    output_probs[..., 1] = prob_each_direction  # P_minus_x
+    output_probs[..., 2] = prob_each_direction  # P_plus_y
+    output_probs[..., 3] = prob_each_direction  # P_minus_y
+    output_probs[..., 4] = clipped_resting_probs # Prest
+
+    # Optional: Sanity check that probabilities sum to 1.0 for each cell
+    # total_cell_probs = np.sum(output_probs, axis=-1)
+    # if not np.allclose(total_cell_probs, 1.0):
+    #     print("Warning: Probabilities in gaussian_landscape_per_trial do not sum to 1.0 for all cells.")
+    #     print(f"Min sum: {np.min(total_cell_probs)}, Max sum: {np.max(total_cell_probs)}")
+
+    return output_probs

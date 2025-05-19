@@ -308,7 +308,8 @@ from vectorized_disorder_funcs import (
     gaussian_alpha,
     linear_gradient_alpha,
     biased_towards_origin,
-    vortex_flow
+    vortex_flow,
+    gaussian_landscape_per_trial_vectorized
 )
 # Use the VECTORIZED versions suitable for precomputation
 AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
@@ -320,6 +321,7 @@ AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
     "exponential": exponential_rest_prob_vectorized,
     "boundary": boundary_dependent_rest_prob_vectorized,
     "fixed_rest": my_spatial_disorder_vectorized,
+    "gaussian_per_trial": gaussian_landscape_per_trial_vectorized
     # Example name for the fixed rest one
 }
 
@@ -1721,7 +1723,7 @@ if __name__ == "__main__":
             num_walkers=walkers,
             step=step_size, dt=dt, xv=XV, yv=YV,
             disorder_function=selected_disorder_func,
-            disorder_params=disorder_params,alpha_function=selected_alpha_func,alpha_params=alpha_params,disorder_mode=disorder_mode,
+            disorder_params=disorder_params,alpha_type=alpha_type,alpha_params=alpha_params,disorder_mode=disorder_mode,
             use_ctrw=use_ctrw,
             use_pbc=use_pbc,
             check_bounds=check_bounds,

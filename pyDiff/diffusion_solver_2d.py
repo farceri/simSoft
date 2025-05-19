@@ -12,6 +12,34 @@ save_animation_mp4 = False  # Set to True to attempt saving MP4 (requires FFmpeg
 num_snapshots_to_store = 100  # Fewer snapshots for 2D due to larger data per snapshot
 
 
+def get_analytical_msd_2d(t_array, D_star, sigma_p, C_perturb_strength):
+    """
+    Calculates the analytical 2D MSD based on the first-order perturbation theory.
+    <r^2(t)> = 4*D*t + C * 4*sigma_p * (sigma_p - sqrt(sigma_p^2 + 2*D*t))
+    """
+    # Ensure t_array is numpy array for vectorized operations
+    t_array_np = np.asarray(t_array)
+
+    # Zeroth-order term
+    msd_p0 = 4 * D_star * t_array_np
+
+    # First-order correction term
+    # Handle t=0 for the correction part to avoid issues if sigma_p=0 initially, though physically t>0
+    # The term sqrt(sigma_p^2 + 2*D_star*t) is well-defined for t>=0
+    term_inside_sqrt = sigma_p ** 2 + 2 * D_star * t_array_np
+
+    # Ensure we don't take sqrt of negative if by some numerical error term_inside_sqrt is tiny negative
+    # (practically, with t_array_np >= 0 and D_star, sigma_p >=0, this shouldn't happen)
+    term_inside_sqrt = np.maximum(term_inside_sqrt, 0)
+
+    correction_factor = sigma_p - np.sqrt(term_inside_sqrt)
+    msd_p1_contribution = C_perturb_strength * 4 * sigma_p * correction_factor
+
+    total_msd = msd_p0 + msd_p1_contribution
+    return total_msd
+
+
+
 # --- Numba JIT-compiled function for a single time step in 2D ---
 @numba.njit(cache=True)
 def _run_one_step_2d_numba(p_curr_arr, p_next_arr, D_xy_vals_array,
@@ -196,7 +224,7 @@ sigma_p_val = 0.4
 # For consistency with 1D dip strength where C = 1/(sqrt(2pi)sigma_p)
 # if sigma_p = 0.5, C approx 0.798
 #dip_factor_C = 1.0 / (2 * np.pi * sigma_p_val**2) if sigma_p_val > 1e-9 else 0.0
-dip_factor_C = 0.5
+dip_factor_C = 0.39
 Lx_val = 2.0
 Ly_val = 2.0
 T_val = 10  # Reduced T for quicker 2D demo
@@ -317,12 +345,22 @@ if p_sol_snapshots.size > 0:  # Check if there's data
     t_plot = t_sol_snapshots[valid_indices_for_plot]
     msd_plot = msd_values[valid_indices_for_plot]
 
+    if len(t_plot) > 0:  # Ensure t_plot is not empty
+        analytical_msd_values = get_analytical_msd_2d(t_plot, D_star_val, sigma_p_val, dip_factor_C)
+        analytical_normalized_msd = analytical_msd_values / t_plot  # t_plot is already filtered for t > 0
+    else:
+        analytical_msd_values = np.array([])
+        analytical_normalized_msd = np.array([])
+
     if len(t_plot) > 0:
         normalized_msd = msd_plot / t_plot
 
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
         plt.plot(t_plot, normalized_msd, marker='o', linestyle='-')
+        if analytical_normalized_msd.size > 0:
+            plt.plot(t_plot, analytical_normalized_msd, marker='x', linestyle='--', color='red',
+                     label='Analytical MSD/t (Perturbative)')
         plt.xlabel('Time t');
         plt.ylabel(r'$\langle r^2(t) \rangle / t$');
         plt.title('Normalized MSD vs. Time (2D)')
@@ -332,6 +370,16 @@ if p_sol_snapshots.size > 0:  # Check if there's data
         positive_msd_log = msd_plot > 1e-9
         if np.any(positive_msd_log):  # t_plot is already positive here
             plt.plot(t_plot[positive_msd_log], msd_plot[positive_msd_log], marker='o', linestyle='-')
+            if analytical_msd_values.size > 0:
+                # Ensure analytical values are also positive for log plot
+                positive_analytical_msd_log = analytical_msd_values > 1e-9
+                # Plot only where both t_plot and analytical_msd_values are positive for log scale
+                # and align with the t_plot points used for simulation data
+                valid_analytical_indices = positive_msd_log & positive_analytical_msd_log
+                if np.any(valid_analytical_indices):
+                    plt.plot(t_plot[valid_analytical_indices], analytical_msd_values[valid_analytical_indices],
+                             marker='x', linestyle='--', color='red', label='Analytical MSD (Perturbative)')
+
             plt.xscale('log');
             plt.yscale('log')
             plt.xlabel('Time t (log scale)');
