@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import stats
 
 
 IDX_P_X, IDX_M_X, IDX_P_Y, IDX_M_Y, IDX_REST = 0, 1, 2, 3, 4
@@ -566,5 +567,76 @@ def uniform_landscape_per_trial_vectorized(xv, yv, min_rest_prob=0.0, max_rest_p
     output_probs[..., 2] = prob_each_direction      # P_plus_y
     output_probs[..., 3] = prob_each_direction      # P_minus_y
     output_probs[..., 4] = resting_probs_for_cells  # Prest
+
+    return output_probs
+
+
+def truncated_gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0.5, std_dev_rest_prob=0.2, **kwargs):
+    """
+    Generates a landscape of resting probabilities where each grid cell's
+    resting probability is drawn from a Gaussian distribution truncated to [0, 1].
+    This landscape is generated per trial due to trial-specific random seeding.
+
+    Args:
+        xv (np.ndarray): Meshgrid for x-coordinates.
+        yv (np.ndarray): Meshgrid for y-coordinates.
+        mean_rest_prob (float): Mean of the underlying Gaussian distribution
+                                before truncation.
+        std_dev_rest_prob (float): Standard deviation of the underlying Gaussian
+                                   distribution before truncation.
+        **kwargs: Catches unused parameters.
+
+    Returns:
+        np.ndarray: A (ny, nx, 5) array of probabilities [P+x, P-x, P+y, P-y, Prest].
+    """
+    ny, nx = xv.shape
+
+    # Define the desired clip bounds for the resting probability
+    clip_min = 0.0
+    clip_max = 1.0
+
+    if std_dev_rest_prob <= 1e-7: # Effectively zero standard deviation
+        # If std_dev is very small, truncnorm is ill-defined / just returns the mean.
+        # So, we directly use the mean, clipped to the [0, 1] interval.
+        resting_probs_for_cells = np.full((ny, nx), np.clip(mean_rest_prob, clip_min, clip_max))
+    else:
+        # Calculate the 'a' and 'b' parameters for truncnorm.
+        # These define the truncation range (clip_min, clip_max) in terms of
+        # standard deviations from the mean of the underlying Gaussian.
+        # a = (desired_min - mean) / std_dev
+        # b = (desired_max - mean) / std_dev
+        a_trunc = (clip_min - mean_rest_prob) / std_dev_rest_prob
+        b_trunc = (clip_max - mean_rest_prob) / std_dev_rest_prob
+
+        # 1. Draw resting probabilities from a Truncated Gaussian distribution.
+        # Since np.random.seed() is called per trial, this draw will be unique.
+        # The .rvs method draws random variates.
+        resting_probs_for_cells = stats.truncnorm.rvs(
+            a_trunc, b_trunc,
+            loc=mean_rest_prob,       # Mean of the underlying Gaussian
+            scale=std_dev_rest_prob,  # Standard deviation of the underlying Gaussian
+            size=(ny, nx)
+        )
+        # stats.truncnorm.rvs should already return values within [clip_min, clip_max]
+        # but an explicit clip can be a safeguard against tiny floating point errors
+        # or extreme parameter choices, though it shouldn't strictly be necessary here.
+        # resting_probs_for_cells = np.clip(resting_probs_for_cells, clip_min, clip_max)
+
+
+    # 2. Calculate the remaining probability available for movement
+    probability_for_movement = 1.0 - resting_probs_for_cells
+
+    # 3. Distribute the movement probability equally among the four directions
+    # Ensure prob_each_direction is not negative.
+    prob_each_direction = np.maximum(0.0, probability_for_movement / 4.0) # 4.0 for NUM_DIRECTIONS
+
+    # 4. Construct the output probability array
+    # Shape: (ny, nx, 5) for [P+x, P-x, P+y, P-y, Prest]
+    output_probs = np.zeros((ny, nx, 5), dtype=np.float32)
+    output_probs[..., 0] = prob_each_direction      # P_plus_x
+    output_probs[..., 1] = prob_each_direction      # P_minus_x
+    output_probs[..., 2] = prob_each_direction      # P_plus_y
+    output_probs[..., 3] = prob_each_direction      # P_minus_y
+    output_probs[..., 4] = resting_probs_for_cells.astype(np.float32) # Prest, ensure float32
 
     return output_probs

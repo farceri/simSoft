@@ -313,7 +313,8 @@ from vectorized_disorder_funcs import (
     biased_towards_origin,
     vortex_flow,
     gaussian_landscape_per_trial_vectorized,
-    uniform_landscape_per_trial_vectorized
+    uniform_landscape_per_trial_vectorized,
+    truncated_gaussian_landscape_per_trial_vectorized
 )
 # Use the VECTORIZED versions suitable for precomputation
 AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
@@ -326,7 +327,8 @@ AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
     "boundary": boundary_dependent_rest_prob_vectorized,
     "fixed_rest": my_spatial_disorder_vectorized,
     "gaussian_per_trial": gaussian_landscape_per_trial_vectorized,
-    "uniform_per_trial": uniform_landscape_per_trial_vectorized
+    "uniform_per_trial": uniform_landscape_per_trial_vectorized,
+    "truncated_gaussian": truncated_gaussian_landscape_per_trial_vectorized
     # Example name for the fixed rest one
 }
 
