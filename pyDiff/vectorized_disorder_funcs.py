@@ -464,7 +464,7 @@ def vortex_flow(x, y, strength=0.8, **kwargs):
 
     return probs.astype(np.float32)
 
-def gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0.2, std_dev_rest_prob=0.1, max_allowed_rest_prob=0.95):
+def gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0, std_dev_rest_prob=0.4, max_allowed_rest_prob=0.95):
     """
     Generates a landscape of resting probabilities where each grid cell's
     resting probability is drawn from a Gaussian distribution.
@@ -512,5 +512,59 @@ def gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0.2, std_dev_
     # if not np.allclose(total_cell_probs, 1.0):
     #     print("Warning: Probabilities in gaussian_landscape_per_trial do not sum to 1.0 for all cells.")
     #     print(f"Min sum: {np.min(total_cell_probs)}, Max sum: {np.max(total_cell_probs)}")
+
+    return output_probs
+
+def uniform_landscape_per_trial_vectorized(xv, yv, min_rest_prob=0.0, max_rest_prob=1):
+    """
+    Generates a landscape of resting probabilities where each grid cell's
+    resting probability is drawn from a Uniform distribution.
+    This landscape is generated per trial due to trial-specific random seeding.
+
+    Args:
+        xv (np.ndarray): Meshgrid for x-coordinates.
+        yv (np.ndarray): Meshgrid for y-coordinates.
+        min_rest_prob (float): Minimum value for the uniform distribution of resting probability.
+                               Should be between 0 and 1.
+        max_rest_prob (float): Maximum value for the uniform distribution of resting probability.
+                               Should be between 0 and 1, and >= min_rest_prob.
+
+    Returns:
+        np.ndarray: A (ny, nx, 5) array of probabilities [P+x, P-x, P+y, P-y, Prest].
+    """
+    ny, nx = xv.shape
+
+    # Validate and clip input probabilities to ensure they are within [0, 1]
+    # and min_rest_prob <= max_rest_prob
+    # (More robust input validation could be done at the config loading stage)
+    actual_min_rest = np.clip(min_rest_prob, 0.0, 1.0)
+    actual_max_rest = np.clip(max_rest_prob, 0.0, 1.0)
+    if actual_min_rest > actual_max_rest:
+        # If min > max after clipping (e.g. min=0.7, max=0.5), swap them or set to a valid range.
+        # Here, we'll ensure min is not greater than max.
+        actual_min_rest, actual_max_rest = sorted([actual_min_rest, actual_max_rest])
+        print(f"Warning: min_rest_prob ({min_rest_prob}) was > max_rest_prob ({max_rest_prob})."
+              f" Adjusted to min={actual_min_rest}, max={actual_max_rest}")
+
+
+    # 1. Draw resting probabilities from a Uniform distribution for each cell.
+    # Since np.random.seed() is called per trial, this draw will be unique per trial.
+    resting_probs_for_cells = np.random.uniform(low=actual_min_rest, high=actual_max_rest, size=(ny, nx))
+
+    # 2. Calculate the remaining probability available for movement
+    probability_for_movement = 1.0 - resting_probs_for_cells
+
+    # 3. Distribute the movement probability equally among the four directions
+    # Ensure prob_each_direction is not negative.
+    prob_each_direction = np.maximum(0.0, probability_for_movement / 4.0)
+
+    # 4. Construct the output probability array
+    # Shape: (ny, nx, 5) for [P+x, P-x, P+y, P-y, Prest]
+    output_probs = np.zeros((ny, nx, 5), dtype=np.float32)
+    output_probs[..., 0] = prob_each_direction      # P_plus_x
+    output_probs[..., 1] = prob_each_direction      # P_minus_x
+    output_probs[..., 2] = prob_each_direction      # P_plus_y
+    output_probs[..., 3] = prob_each_direction      # P_minus_y
+    output_probs[..., 4] = resting_probs_for_cells  # Prest
 
     return output_probs

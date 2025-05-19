@@ -9,6 +9,9 @@ import os # To potentially get CPU count
 import argparse # Import argparse
 import yaml
 import traceback
+
+from simSoft.pyDiff.vectorized_disorder_funcs import uniform_landscape_per_trial_vectorized
+
 '''
 
 
@@ -309,7 +312,8 @@ from vectorized_disorder_funcs import (
     linear_gradient_alpha,
     biased_towards_origin,
     vortex_flow,
-    gaussian_landscape_per_trial_vectorized
+    gaussian_landscape_per_trial_vectorized,
+    uniform_landscape_per_trial_vectorized
 )
 # Use the VECTORIZED versions suitable for precomputation
 AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
@@ -321,7 +325,8 @@ AVAILABLE_STANDARD_DISORDER_FUNCTIONS = {
     "exponential": exponential_rest_prob_vectorized,
     "boundary": boundary_dependent_rest_prob_vectorized,
     "fixed_rest": my_spatial_disorder_vectorized,
-    "gaussian_per_trial": gaussian_landscape_per_trial_vectorized
+    "gaussian_per_trial": gaussian_landscape_per_trial_vectorized,
+    "uniform_per_trial": uniform_landscape_per_trial_vectorized
     # Example name for the fixed rest one
 }
 
