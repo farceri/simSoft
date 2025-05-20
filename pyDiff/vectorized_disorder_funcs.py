@@ -465,7 +465,7 @@ def vortex_flow(x, y, strength=0.8, **kwargs):
 
     return probs.astype(np.float32)
 
-def gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0, std_dev_rest_prob=0.4, max_allowed_rest_prob=0.95):
+def gaussian_landscape_per_trial_vectorized(xv, yv, mean_rest_prob=0, std_dev_rest_prob=0.4, max_allowed_rest_prob=1):
     """
     Generates a landscape of resting probabilities where each grid cell's
     resting probability is drawn from a Gaussian distribution.

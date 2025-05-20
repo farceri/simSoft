@@ -1436,6 +1436,12 @@ if __name__ == "__main__":
     run_histograms = hist_config.get('enabled', False)  # Use this variable 'run_histograms'
     hist_steps_to_plot = hist_config.get('steps_to_plot', [])  # Use 'hist_steps_to_plot'
 
+    # --- Save Data Config ---
+    save_data_config = config.get('save_data', {})
+    save_data_enabled = save_data_config.get('enabled', False)
+    save_data_filename = save_data_config.get('filename', 'simulation_output.txt')
+    save_data_delimiter = save_data_config.get('delimiter', ',')
+
     # --- Print Loaded Configuration Summary ---
     # (This part correctly uses the local variables)
     print("\n--- Simulation Configuration ---")
@@ -1450,6 +1456,7 @@ if __name__ == "__main__":
     print("-" * 30)
     print(f"  Animation: Run={run_animation}, Save={save_animation}")
     print(f"  Histograms: Run={run_histograms}, Steps={hist_steps_to_plot}")
+    print(f"  Save Data: Enabled={save_data_enabled}, File='{save_data_filename}', Delimiter='{save_data_delimiter}'")
     print("-" * 30)
 
     # --- Setup Grid ---
@@ -1719,6 +1726,52 @@ if __name__ == "__main__":
 
     else:
         print("Parallel simulation failed or produced no results, skipping analysis and plotting.")
+
+    # --- Save Data to File ---
+    if save_data_enabled:
+        if avg_msd is not None and time_axis is not None:
+            print(f"\n--- Saving Data to {save_data_filename} ---")
+            try:
+                # Ensure we only use valid data points for logs and division
+                # Use the same criteria as for log-log plotting for consistency
+                valid_indices_save = (time_axis > 1e-15) & (avg_msd > 1e-15)
+
+                if np.any(valid_indices_save):
+                    t_to_save = time_axis[valid_indices_save]
+                    msd_to_save = avg_msd[valid_indices_save]
+
+                    log_t_to_save = np.log(t_to_save)
+                    msd_over_t_to_save = msd_to_save / t_to_save # Safe due to t_to_save > 0
+                    log_msd_to_save = np.log(msd_to_save)     # Safe due to msd_to_save > 0
+
+                    # Combine into a 2D array (N_points x 4 columns)
+                    data_to_save_array = np.column_stack((
+                        t_to_save,
+                        log_t_to_save,
+                        msd_over_t_to_save,
+                        log_msd_to_save
+                    ))
+
+                    header_string = f"Time{save_data_delimiter}LogTime{save_data_delimiter}MSDoverTime{save_data_delimiter}LogMSD"
+
+                    np.savetxt(
+                        save_data_filename,
+                        data_to_save_array,
+                        delimiter=save_data_delimiter,
+                        header=header_string,
+                        comments='', # Important to prevent '#' before the header
+                        fmt='%.8e' # Example format: scientific notation with 8 decimal places
+                    )
+                    print(f"Data successfully saved to {save_data_filename}")
+                else:
+                    print("Warning: No valid data points (t>0 and MSD>0) to save.")
+            except Exception as e:
+                print(f"!!! Error saving data to file: {e}")
+                traceback.print_exc()
+        else:
+            print("Skipping data saving as simulation results (avg_msd or time_axis) are not available.")
+
+
 
     # --- End of the main analysis and plotting block ---
     # --- Optional: Run Single Trial for Animation ---
