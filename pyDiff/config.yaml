@@ -1,7 +1,7 @@
 simulation:
   steps: 100000        # Steps for main MSD run
-  walkers: 10
-  trials: 2  # Parallel trials for MSD
+  walkers: 1
+  trials: 1000  # Parallel trials for MSD
   dt: 0.0001
   step_size: 0.001
 
@@ -67,5 +67,5 @@ histograms:
 
 save_data:
   enabled: true            # Set to true to save data, false to disable
-  filename: "simulation_results_TEST.txt" # Name of the output file
+  filename: "simulation_results_uniform-0-99-1k-trials.txt" # Name of the output file
   delimiter: ","           # Delimiter for the text file (e.g., "," for CSV, "\t" for TSV)
