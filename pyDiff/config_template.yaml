@@ -1,7 +1,7 @@
 simulation:
-  steps: 100000        # Steps for main MSD run
+  steps: 50000        # Steps for main MSD run
   walkers: 1
-  trials: 1000  # Parallel trials for MSD
+  trials: 20  # Parallel trials for MSD
   dt: 0.0001
   step_size: 0.001
 
@@ -17,15 +17,15 @@ boundaries:
 disorder:
   # Type must be one of the keys in AVAILABLE_DISORDER_FUNCTIONS in the script
   # e.g., none, gaussian, uniform, plateau, gaussian_per_trial , uniform_per_trial,truncated_gaussian etc.
-  type: uniform_per_trial
+  type: truncated_gaussian
   # Parameters specific to the chosen disorder type
   # Only parameters relevant to 'type' above will be used
   params:
-    #mean_rest_prob: 0.5      # Example: Average resting probability
-    #std_dev_rest_prob: 0.5   # Example: Standard deviation for the draw
+    mean_rest_prob: 0.5      # Example: Average resting probability
+    std_dev_rest_prob: 0.5   # Example: Standard deviation for the draw
     #max_allowed_rest_prob: 1 # Example: Max P_rest, ensures movement possible
-    min_rest_prob: 0  # Example: Minimum resting probability (e.g., 10%)
-    max_rest_prob: 0.99  # Example: Maximum resting probability (e.g., 60%)
+    #min_rest_prob: 0  # Example: Minimum resting probability (e.g., 10%)
+    #max_rest_prob: 0.99  # Example: Maximum resting probability (e.g., 60%)
     # Resting probabilities will be drawn uniformly between these two values.
     #strength: 0.7 #For bias toward origin and vortex
     #sigma: 0.4
@@ -66,10 +66,10 @@ histograms:
   steps_to_plot: [1000, 10000, 100000]
 
 plotting:
-  show_plots_at_end: true   # Default to true for standalone runs.
+  show_plots_at_end: false   # Default to true for standalone runs.
                             # The sweep script will set this to false.
 
 save_data:
   enabled: true            # Set to true to save data, false to disable
-  filename: "simulation_results_uniform-0-99-1k-trials.txt" # Name of the output file
+  filename: "temp_simulation_results.txt" # Name of the output file
   delimiter: ","           # Delimiter for the text file (e.g., "," for CSV, "\t" for TSV)

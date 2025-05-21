@@ -1442,6 +1442,11 @@ if __name__ == "__main__":
     save_data_filename = save_data_config.get('filename', 'simulation_output.txt')
     save_data_delimiter = save_data_config.get('delimiter', ',')
 
+    # --- Plotting Control Config ---
+    plotting_config = config.get('plotting', {})
+    # Default to True so plots are shown if the script is run normally (not via sweep)
+    show_plots_main_run = plotting_config.get('show_plots_at_end', True)
+
     # --- Print Loaded Configuration Summary ---
     # (This part correctly uses the local variables)
     print("\n--- Simulation Configuration ---")
@@ -1457,6 +1462,7 @@ if __name__ == "__main__":
     print(f"  Animation: Run={run_animation}, Save={save_animation}")
     print(f"  Histograms: Run={run_histograms}, Steps={hist_steps_to_plot}")
     print(f"  Save Data: Enabled={save_data_enabled}, File='{save_data_filename}', Delimiter='{save_data_delimiter}'")
+    print(f"  Show Main Plots at End: {show_plots_main_run}")
     print("-" * 30)
 
     # --- Setup Grid ---
@@ -1620,7 +1626,8 @@ if __name__ == "__main__":
         plt.title(f'Avg Effective Diffusion Coefficient ({trials} Trials)')  # Ensure trials is defined
         plt.grid(True)
         plt.legend()
-        plt.show()
+        if show_plots_main_run:  # <--- ADD THIS CONDITION
+            plt.show()
 
         # Plot Log-Log MSD
         plt.figure(figsize=(10, 6))
@@ -1719,7 +1726,8 @@ if __name__ == "__main__":
             plt.title(f'Avg Mean Squared Displacement (Log-Log, {trials} Trials)')  # Ensure trials defined
             plt.grid(True, which='both');
             plt.legend()
-            plt.show()
+            if show_plots_main_run:  # <--- ADD THIS CONDITION
+                plt.show()
 
         else:
             print("No valid data points for log-log plotting.")
@@ -1841,6 +1849,7 @@ if __name__ == "__main__":
                 rw_hist.plot_position_histograms(time_step=step_to_plot)
             else:
                 print(f"Warning: Requested hist step {step_to_plot} > sim length {hist_run_steps}")
-        plt.show()
+        if show_plots_main_run:
+            plt.show()
 
     print("\nSimulation Finished.")
