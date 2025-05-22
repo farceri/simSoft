@@ -1,7 +1,7 @@
 simulation:
   steps: 50000        # Steps for main MSD run
   walkers: 1
-  trials: 20  # Parallel trials for MSD
+  trials: 100 # Parallel trials for MSD
   dt: 0.0001
   step_size: 0.001
 
@@ -12,7 +12,7 @@ grid:
 
 boundaries:
   pbc: false          # Use Periodic Boundary Conditions?
-  check_bounds: true # Check if walkers leave grid? (Ignored if pbc is true)
+  check_bounds: false # Check if walkers leave grid? (Ignored if pbc is true)
 
 disorder:
   # Type must be one of the keys in AVAILABLE_DISORDER_FUNCTIONS in the script

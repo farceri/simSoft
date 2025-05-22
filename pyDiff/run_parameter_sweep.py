@@ -14,8 +14,8 @@ SWEEP_RESULTS_CSV = "truncated_gaussian_sweep_results.csv"  # Updated name for c
 
 # Define the range of disorder parameters for 'truncated_gaussian_landscape_per_trial_vectorized'
 # These are the parameters of the *underlying* Gaussian before truncation to [0,1]
-mean_rest_prob_values = [0.1, 0.3]  # Example: Mean of the underlying Gaussian
-std_dev_rest_prob_values = [0.1, 0.2]  # Example: Std dev of the underlying Gaussian
+mean_rest_prob_values = [-0.9,-0,8,-0.7]  # Example: Mean of the underlying Gaussian
+std_dev_rest_prob_values = [0.01,0.05,0,75,0.01]  # Example: Std dev of the underlying Gaussian
 
 # Parameters for t_diff and D extraction (tune these as needed)
 SLOPE_TOLERANCE = 1e-4
@@ -230,7 +230,7 @@ if not results_df.empty:
         plt.text(0.5, 0.5, 'No valid data for t_diff vs Variance plot', horizontalalignment='center', verticalalignment='center')
 
     plt.tight_layout()
-    plt.savefig("sweep_summary_plots_updated.png") # Changed save filename slightly
+    plt.savefig("sweep_summary_plots_MEDIABASSA_DEVST09.png") # Changed save filename slightly
     plt.show()
 else:
     print("No results collected to plot.")

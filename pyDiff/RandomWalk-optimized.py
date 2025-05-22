@@ -399,7 +399,7 @@ class RandomWalk:
             dys = np.diff(self.y_coords)
             if np.allclose(dxs, dxs[0]) and np.allclose(dys, dys[0]):
                 self.is_uniform_grid = True
-                self.x_min_grid = self.x_coords[0];
+                self.x_min_grid = self.x_coords[0]
                 self.y_min_grid = self.y_coords[0]
                 self.dx = dxs[0] if abs(dxs[0]) > 1e-15 else 1.0
                 self.dy = dys[0] if abs(dys[0]) > 1e-15 else 1.0
