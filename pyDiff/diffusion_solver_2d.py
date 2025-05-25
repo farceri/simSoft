@@ -11,29 +11,116 @@ save_animation_gif = False  # Set to True to attempt saving GIF (requires Pillow
 save_animation_mp4 = False  # Set to True to attempt saving MP4 (requires FFmpeg)
 num_snapshots_to_store = 100  # Fewer snapshots for 2D due to larger data per snapshot
 
+#QUESTA NON FUNZIONA MOLTO BENE
+def get_analytical_msd_2d_second_order(t_array, D_star, sigma_p, C_perturb_strength):
+    """
+    Calculates the analytical 2D MSD based on perturbation theory,
+    including terms up to the second order in epsilon (C_perturb_strength).
+
+    The formula is approximately:
+    <r^2(t)> = 4*D_star*t  (zeroth order)
+               - 2 * C_perturb_strength * sigma_p^2 * ln(1 + (2*D_star*t) / sigma_p^2) (first order)
+               - 2 * C_perturb_strength^2 * [G(X_t) - 1] (second order)
+    where X_t = 1 + (2*D_star*t) / sigma_p^2 and
+    G(X) = ln(X) + 3/X - 2/X^2 - (1/X + 1/X^2)*ln(X).
+
+    Args:
+        t_array (array-like): Array of time points.
+        D_star (float): Diffusion coefficient D*.
+        sigma_p (float): Characteristic length scale sigma (sigma_p > 0).
+        C_perturb_strength (float): Perturbation strength epsilon.
+
+    Returns:
+        numpy.ndarray: Array of MSD values corresponding to t_array.
+    """
+    # Ensure t_array is a numpy array for vectorized operations
+    t_array_np = np.asarray(t_array)
+
+    # Validate inputs
+    if np.any(t_array_np < 0):
+        raise ValueError("Time points in t_array must be non-negative.")
+    if D_star < 0:
+        raise ValueError("Diffusion coefficient D_star must be non-negative.")
+    if sigma_p <= 0:
+        raise ValueError("Characteristic length sigma_p must be positive.")
+
+    # --- Zeroth-order term ---
+    msd_p0 = 4 * D_star * t_array_np
+
+    # --- First-order correction term ---
+    # X_t = 1 + (2*D_star*t) / sigma_p^2
+    # A_2D(t) = ln(X_t)
+    X_t = 1 + (2 * D_star * t_array_np) / (sigma_p ** 2)
+    # Handle t=0 case for log to avoid issues if t_array_np contains 0 and X_t becomes 1
+    # np.log(1) is 0, so A_2D_t will be 0 for t=0, which is correct.
+    A_2D_t = np.log(X_t)
+    msd_p1_contribution = -2 * C_perturb_strength * (sigma_p ** 2) * A_2D_t
+
+    # --- Second-order correction term ---
+    # G(X) = ln(X) + 3/X - 2/X^2 - (1/X + 1/X^2)*ln(X)
+    # G(1) = 1
+
+    # Calculate G(X_t)
+    # Need to handle X_t = 1 (i.e., t=0) carefully for terms like (ln X_t)/X_t if X_t could be zero,
+    # but X_t >= 1 here.
+    # For t=0, X_t=1. log_Xt will be 0.
+    log_Xt = np.log(X_t)  # This is A_2D_t
+
+    # Precompute reciprocals to avoid division by zero if X_t could be zero,
+    # but X_t >= 1, so direct division is fine.
+    inv_Xt = 1.0 / X_t
+    inv_Xt_sq = inv_Xt ** 2
+
+    G_Xt = log_Xt + 3 * inv_Xt - 2 * inv_Xt_sq - (inv_Xt + inv_Xt_sq) * log_Xt
+    G_1 = 1.0
+
+    msd_p2_contribution = -2 * (C_perturb_strength ** 2) * (G_Xt - G_1)
+
+    # Ensure correction is zero at t=0 if X_t=1 results in G_Xt=1
+    # For t=0, X_t=1, log_Xt=0. G_Xt = 0 + 3 - 2 - (1+1)*0 = 1. So G_Xt - G_1 = 0. Correct.
+
+    total_msd = msd_p0 + msd_p1_contribution + msd_p2_contribution
+    return total_msd
 
 def get_analytical_msd_2d(t_array, D_star, sigma_p, C_perturb_strength):
     """
-    Calculates the analytical 2D MSD based on the first-order perturbation theory.
-    <r^2(t)> = 4*D*t + C * 4*sigma_p * (sigma_p - sqrt(sigma_p^2 + 2*D*t))
+    Calculates the analytical 2D MSD based on the first-order perturbation theory
+    derived in our discussion.
+
+    The formula is:
+    <r^2(t)> = 4*D_star*t - 2 * C_perturb_strength * sigma_p^2 * ln(1 + (2*D_star*t) / sigma_p^2)
+
+    Args:
+        t_array (array-like): Array of time points.
+        D_star (float): Diffusion coefficient D*.
+        sigma_p (float): Characteristic length scale sigma (sigma_p > 0).
+        C_perturb_strength (float): Perturbation strength epsilon.
+
+    Returns:
+        numpy.ndarray: Array of MSD values corresponding to t_array.
     """
-    # Ensure t_array is numpy array for vectorized operations
+    # Ensure t_array is a numpy array for vectorized operations
     t_array_np = np.asarray(t_array)
+
+    # Validate inputs
+    if np.any(t_array_np < 0):
+        raise ValueError("Time points in t_array must be non-negative.")
+    if D_star < 0:
+        raise ValueError("Diffusion coefficient D_star must be non-negative.")
+    if sigma_p <= 0:
+        raise ValueError("Characteristic length sigma_p must be positive.")
 
     # Zeroth-order term
     msd_p0 = 4 * D_star * t_array_np
 
     # First-order correction term
-    # Handle t=0 for the correction part to avoid issues if sigma_p=0 initially, though physically t>0
-    # The term sqrt(sigma_p^2 + 2*D_star*t) is well-defined for t>=0
-    term_inside_sqrt = sigma_p ** 2 + 2 * D_star * t_array_np
+    # A_2D(t) = ln(1 + (2*D_star*t) / sigma_p^2)
+    # The argument of log is 1 + (non-negative term), so it's >= 1.
+    # log is well-defined.
+    log_argument = 1 + (2 * D_star * t_array_np) / (sigma_p**2)
+    A_2D_t = np.log(log_argument)
 
-    # Ensure we don't take sqrt of negative if by some numerical error term_inside_sqrt is tiny negative
-    # (practically, with t_array_np >= 0 and D_star, sigma_p >=0, this shouldn't happen)
-    term_inside_sqrt = np.maximum(term_inside_sqrt, 0)
-
-    correction_factor = sigma_p - np.sqrt(term_inside_sqrt)
-    msd_p1_contribution = C_perturb_strength * 4 * sigma_p * correction_factor
+    msd_p1_contribution = -2 * C_perturb_strength * (sigma_p**2) * A_2D_t
 
     total_msd = msd_p0 + msd_p1_contribution
     return total_msd
@@ -221,10 +308,11 @@ def solve_pde_2d_memory_optimized_numba(D_star, sigma_p, dip_strength_factor, Lx
 # --- Simulation Parameters ---
 D_star_val = 2.5/1000
 sigma_p_val = 0.4
+Lc_val = 0.05
 # For consistency with 1D dip strength where C = 1/(sqrt(2pi)sigma_p)
 # if sigma_p = 0.5, C approx 0.798
 #dip_factor_C = 1.0 / (2 * np.pi * sigma_p_val**2) if sigma_p_val > 1e-9 else 0.0
-dip_factor_C = 0.39
+#dip_factor_C = 0.39
 Lx_val = 2.0
 Ly_val = 2.0
 T_val = 10  # Reduced T for quicker 2D demo
@@ -239,15 +327,27 @@ Ny_val = 101
 Nt_val = 100000  # Adjusted for 2D stability and shorter T.
 # For user's 10^7, it would be extremely long.
 
+if sigma_p_val <= 1e-9: # sigma_p must be positive to define epsilon meaningfully
+    epsilon_val = 0.0 # No perturbation if sigma_p is zero
+    print("Warning: sigma_p_val is close to zero, setting epsilon (perturbation strength) to 0.")
+else:
+    epsilon_val = Lc_val / (np.sqrt(2 * np.pi) * sigma_p_val)
 
+print(f"Calculated Epsilon (Perturbation Strength): {epsilon_val:.4f}")
+
+# --- Run the simulation ---
 # --- Run the simulation ---
 overall_start_time = timer.time()
 print(
-    f"Preparing to run 2D simulation with Nx={Nx_val}, Ny={Ny_val}, Nt={Nt_val} (will store {num_snapshots_to_store} snapshots)")
+    f"Preparing to run 2D simulation with Nx={Nx_val}, Ny={Ny_val}, Nt={Nt_val} "
+    f"(using Lc={Lc_val:.3f}, sigma_p={sigma_p_val:.3f}, resulting epsilon={epsilon_val:.4f})"
+) # Added Lc and epsilon to print
 x_sol, y_sol, t_sol_snapshots, p_sol_snapshots, D_xy_plot = \
-    solve_pde_2d_memory_optimized_numba(D_star_val, sigma_p_val, dip_factor_C, Lx_val, Ly_val, T_val, Nx_val, Ny_val,
+    solve_pde_2d_memory_optimized_numba(D_star_val, sigma_p_val, epsilon_val, # <-- Use epsilon_val here
+                                        Lx_val, Ly_val, T_val, Nx_val, Ny_val,
                                         Nt_val, num_snapshots_to_store)
 overall_end_time = timer.time()
+
 print(f"Total script time (including setup and simulation): {overall_end_time - overall_start_time:.4f} seconds.")
 
 # --- Static Plots (using stored snapshots) ---
@@ -346,7 +446,7 @@ if p_sol_snapshots.size > 0:  # Check if there's data
     msd_plot = msd_values[valid_indices_for_plot]
 
     if len(t_plot) > 0:  # Ensure t_plot is not empty
-        analytical_msd_values = get_analytical_msd_2d(t_plot, D_star_val, sigma_p_val, dip_factor_C)
+        analytical_msd_values = get_analytical_msd_2d(t_plot, D_star_val, sigma_p_val, epsilon_val)
         analytical_normalized_msd = analytical_msd_values / t_plot  # t_plot is already filtered for t > 0
     else:
         analytical_msd_values = np.array([])

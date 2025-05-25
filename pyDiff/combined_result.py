@@ -136,10 +136,10 @@ else:
 ax1.set_xlabel('Actual Mean of Rest Prob ($E[\\bar{\\rho}_i]$)')
 if effective_d_star == 1.0:
     ax1.set_ylabel('Avg. Diffusion Coefficient ($D_{avg}$)')
-#else:
-    #ax1.set_ylabel(f'Normalized Avg. Diff. Coeff. ($D_{avg} / D^*$) [$D^*={effective_d_star:.1e}$]')
-#ax1.grid(True, linestyle=':')
-#ax1.set_title('$D_{avg}/D^*$ vs. Actual Mean')
+else:
+    ax1.set_ylabel(f'Normalized Avg. Diff. Coeff. ($D / D^*$) [$D^*={effective_d_star:.1e}$]')
+ax1.grid(True, linestyle=':')
+ax1.set_title('$D_{avg}/D^*$ vs. Actual Mean')
 
 legend_handles_plot1 = []
 legend_labels_plot1 = []

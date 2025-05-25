@@ -1363,7 +1363,7 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
             # Ensure this is well after any typical t_diff and gives a reasonable window
             # Consider making these (0.75, 1000, 5) configurable if needed
             min_late_time_points = 5  # Minimum number of points to consider in late time
-            late_time_start_fraction = 1.2
+            late_time_start_fraction = 1
 
             # Ensure late_time_start_step allows for at least min_late_time_points
             potential_start_step = int(num_steps_sim * late_time_start_fraction)
