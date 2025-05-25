@@ -1194,13 +1194,15 @@ class RandomWalk:
 def run_single_trial(params):
     """ Runs one full simulation trial and returns the MSD array. """
     trial_index = -1
+    actual_mean_prest_for_trial = np.nan
+    actual_var_prest_for_trial = np.nan
     try:
         # --- Unpack parameters including type names and param dicts ---
         trial_index, num_steps, num_walkers, step, dt, \
         disorder_type_param, disorder_params_param, \
         alpha_type_param, alpha_params_param, \
         disorder_mode_param, \
-        xv, yv, \
+        xv_param, yv_param, \
         use_ctrw_flag, use_pbc_flag, check_bounds_flag, seed = params
 
         np.random.seed(seed)
@@ -1220,7 +1222,7 @@ def run_single_trial(params):
         # Ensure RandomWalk.__init__ accepts these keyword arguments
         rw = RandomWalk(
             num_steps=num_steps, num_walkers=num_walkers, step=step, dt=dt,
-            xv=xv, yv=yv,
+            xv=xv_param, yv=yv_param,
             disorder_function=selected_disorder_func_obj,  # Pass function object
             disorder_params=disorder_params_param,
             disorder_mode=disorder_mode_param,
@@ -1234,26 +1236,33 @@ def run_single_trial(params):
             # store_history=...
         )
 
-        # trajectories method now uses the internal disorder_mode
-        rw.trajectories()
+        # Calculate actual mean and variance of Prest for this trial's landscape
+        if rw.precomputed_probs is not None and \
+                rw.disorder_mode == 'standard' and \
+                disorder_type_param == 'truncated_gaussian':  # Be specific if only for this type
+            # Prest is the 5th element (index 4) in the last dimension
+            prest_grid_for_trial = rw.precomputed_probs[..., 4]
+            actual_mean_prest_for_trial = np.mean(prest_grid_for_trial)
+            actual_var_prest_for_trial = np.var(prest_grid_for_trial)
 
-        msd_result = rw.compute_msd()
-        return msd_result
+        rw.trajectories()  # This calculates and stores msd_results internally
+        msd_result = rw.msd_results  # Get the msd_results calculated by trajectories()
+
+        return msd_result, actual_mean_prest_for_trial, actual_var_prest_for_trial
     except Exception as e:
         trial_label = trial_index + 1 if trial_index != -1 else 'UNKNOWN'
         print(f"!!! Error in Trial {trial_label}: {e}")
         traceback.print_exc()
-        return None
+        return None, np.nan, np.nan
 
 
 
 # --- main_parallel function (Modified task_args creation) ---
 def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
                   disorder_type, disorder_params, # Accept type name & params
-                  alpha_type, alpha_params,       # Accept type name & params
-                  disorder_mode,
-                  xv, yv,
-                  use_ctrw_flag, use_pbc_flag, check_bounds_flag):
+                  alpha_type, alpha_params, # Accept type name & params
+                  disorder_mode_config,xv, yv,
+                  use_ctrw_flag, use_pbc_flag, check_bounds_flag,analysis_mode_param,dt_sim_param):
     start_time = timer.time()
     # ... (get num_workers) ...
     try: num_workers = os.cpu_count(); print(f"Detected {num_workers} cores.")
@@ -1269,7 +1278,7 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
             (i, num_steps, num_walkers, step, dt,               # 5
              disorder_type, disorder_params,                    # 2
              alpha_type, alpha_params,                          # 2
-             disorder_mode,                                     # 1
+             disorder_mode_config,                                     # 1
              xv, yv,                                            # 2
              use_ctrw_flag, use_pbc_flag, check_bounds_flag,    # 3
              unique_seed)                                       # 1 --> Total 16 items
@@ -1278,34 +1287,145 @@ def main_parallel(num_trials_total, num_steps, num_walkers, step, dt,
     # Print the mode being used for the parallel run
     print(f"\nStarting {num_trials_total} trials using {num_workers} worker processes (Disorder Mode: {disorder_mode}, CTRW: {use_ctrw_flag})...")
     # ... (multiprocessing pool execution, result processing) ...
-    results = []
+    results_tuples = [] # Will store (msd_result, actual_mean_prest, actual_var_prest)
     try:
-        # Ensure Pool is managed correctly (e.g., with 'with' statement)
         with multiprocessing.Pool(processes=num_workers) as pool:
-            results = pool.map(run_single_trial, task_args)
+            results_tuples = pool.map(run_single_trial, task_args)
     except Exception as e:
-        # This catches errors during the map process itself (like pickling issues)
         print(f"!!! Error during parallel execution setup/map: {e}")
-        # Optionally print traceback here too if needed
-        # traceback.print_exc()
+        return None, None, np.nan, np.nan,np.nan,np.nan
 
     print(f"\nParallel execution finished. Time taken: {timer.time() - start_time:.2f} seconds")
+    successful_msds = []
+    actual_means_prest_list = [] # This list contains E[rho|landscape_i] for each trial i
+    actual_vars_prest_list = []  # This list contains Var(rho|landscape_i) for each trial i
 
-    # ... (rest of the function: process results, return avg_msd, time_axis) ...
-    successful_results = [res for res in results if res is not None]
-    if not successful_results:
+
+    for res_tuple in results_tuples:
+        if res_tuple is not None and res_tuple[0] is not None:
+            successful_msds.append(res_tuple[0])
+            if not np.isnan(res_tuple[1]):
+                actual_means_prest_list.append(res_tuple[1])
+            if not np.isnan(res_tuple[2]):
+                actual_vars_prest_list.append(res_tuple[2])
+
+    if not successful_msds:
         print("No trials completed successfully.")
-        return None, None
-    print(f"Successful trials: {len(successful_results)}/{num_trials_total}")
+        return None, None, np.nan, np.nan,np.nan,np.nan
+
+    print(f"Successful trials: {len(successful_msds)}/{num_trials_total}")
+
+    avg_actual_mean_prest = np.mean(actual_means_prest_list) if actual_means_prest_list else np.nan
+    avg_actual_var_prest = np.mean(actual_vars_prest_list) if actual_vars_prest_list else np.nan
+
+    # --- NEW: Calculate Variance of Trial Means ---
+    var_of_trial_means_prest = np.nan
+    if len(actual_means_prest_list) >= 2: # Need at least 2 values to compute variance
+        var_of_trial_means_prest = np.var(actual_means_prest_list, ddof=1) # This is Var(E[rho|landscape])
+        print(f"  Calculated variance of trial means (actual_mean_prest_for_trial values): {var_of_trial_means_prest:.6f}")
+    else:
+        print(f"  Not enough trial mean values ({len(actual_means_prest_list)}) to calculate their variance.")
+    # --- END NEW ---
+
+    avg_msd = None
+    time_axis = None  # Initialize time_axis
+
     try:
-        msd_stack = np.stack(successful_results, axis=0)
+        msd_stack = np.stack(successful_msds, axis=0)
         avg_msd = np.mean(msd_stack, axis=0)
-        time_axis = np.arange(num_steps + 1) * dt
-        return avg_msd, time_axis
+        # Ensure time_axis is correctly defined using the actual number of steps from simulation data
+        # and the simulation dt (dt_sim_param which is 'dt' from the config).
+        # num_steps here should be the actual steps recorded in msd_results.
+        # If msd_results has length N, it corresponds to 0 to N-1 steps.
+        # So, if avg_msd has shape (num_simulation_steps + 1),
+        num_simulation_steps_recorded = avg_msd.shape[0] - 1
+        time_axis = np.arange(num_simulation_steps_recorded + 1) * dt_sim_param  # Use dt_sim_param
+
     except Exception as e:
-        print(f"!!! Error processing results (e.g., stacking): {e}")
+        print(f"!!! Error processing results (e.g., stacking MSDs): {e}")
         traceback.print_exc()
-        return None, None
+        # Return NaNs for all expected values if result processing fails
+        return None, None, np.nan, np.nan, np.nan,np.nan  # Added one more np.nan
+
+    # Optimal Placement for Var(D) Calculation:
+    # After `successful_msds` is populated and `time_axis` is correctly defined.
+    # avg_msd and time_axis are now available.
+    # V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V
+
+    var_d_late_time_value = np.nan
+    if analysis_mode_param == 'var_D':
+        if successful_msds and time_axis is not None:  # Ensure time_axis is available
+            d_trial_values = []
+            # num_steps_sim should be consistent with the length of msd_trial and time_axis
+            num_steps_sim = successful_msds[0].shape[0] - 1
+
+            # Define "late-time" regime
+            # Ensure this is well after any typical t_diff and gives a reasonable window
+            # Consider making these (0.75, 1000, 5) configurable if needed
+            min_late_time_points = 5  # Minimum number of points to consider in late time
+            late_time_start_fraction = 1.2
+
+            # Ensure late_time_start_step allows for at least min_late_time_points
+            potential_start_step = int(num_steps_sim * late_time_start_fraction)
+            # Ensure it's not too close to the end that we don't have enough points
+            max_possible_start_step_for_min_points = num_steps_sim - min_late_time_points
+
+            if max_possible_start_step_for_min_points < 0:  # simulation too short
+                late_time_start_step = -1  # Indicates an issue
+            else:
+                late_time_start_step = min(potential_start_step, max_possible_start_step_for_min_points)
+
+            # Fallback if the fraction-based start is too late or calculation is off
+            if late_time_start_step < 0 or late_time_start_step >= num_steps_sim - (min_late_time_points - 1):
+                # Try a fixed number of points from end if fraction method fails or gives too small window
+                if num_steps_sim >= 10:  # Arbitrary minimal length for this fallback
+                    late_time_start_step = num_steps_sim - 10  # Use last 10 points for D_trial calc
+                else:
+                    late_time_start_step = num_steps_sim - (
+                                min_late_time_points - 1) if num_steps_sim >= min_late_time_points else -1
+
+            if late_time_start_step >= 0 and late_time_start_step < num_steps_sim:  # Ensure valid start
+                print( f"  Var(D) calculation: num_steps_sim={num_steps_sim}, late_time_start_step={late_time_start_step}")
+                for msd_trial in successful_msds:
+                    # Ensure msd_trial and time_axis have compatible lengths for slicing
+                    if msd_trial.shape[0] == time_axis.shape[0]:
+                        msd_late = msd_trial[late_time_start_step:]
+                        time_late = time_axis[late_time_start_step:]
+
+                        valid_indices = time_late > 1e-15  # Avoid division by zero in time
+
+                        # Also ensure MSD values are not extremely small or negative if that's possible
+                        # though physical MSD should be non-negative.
+                        # valid_indices = valid_indices & (msd_late > 1e-15) # Optional: if MSD can be noisy around 0
+
+                        if np.any(valid_indices) and msd_late[valid_indices].size > 0:
+                            d_values_for_this_trial = msd_late[valid_indices] / (4 * time_late[valid_indices])
+                            if d_values_for_this_trial.size > 0:
+                                d_trial_values.append(np.mean(d_values_for_this_trial))
+                        else:
+                            print(
+                                f"  Skipping a trial for Var(D) calc due to no valid late time data points (time_late or msd_late problematic).")
+                    else:
+                        print(
+                            f"  Skipping a trial for Var(D) calc due to MSD/time_axis length mismatch: {msd_trial.shape[0]} vs {time_axis.shape[0]}")
+
+                if len(d_trial_values) >= 2:
+                    var_d_late_time_value = np.var(d_trial_values, ddof=1)  # ddof=1 for sample variance
+                    print(
+                        f"  Calculated {len(d_trial_values)} D_trial values for variance. Var(D) = {var_d_late_time_value:.4e}")
+                    # print(f"  D_trial values: {d_trial_values}") # Can be very verbose
+                else:
+                    print(
+                        f"  Not enough D_trial values ({len(d_trial_values)}) to calculate variance of D (need at least 2).")
+            else:
+                print(
+                    f"  Late time start step ({late_time_start_step}) invalid or simulation too short ({num_steps_sim} steps) for reliable Var(D) calculation.")
+        else:
+            print("  Cannot calculate Var(D): successful_msds list is empty or time_axis not defined.")
+    # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
+
+    # Modified return statement
+    return avg_msd, time_axis, avg_actual_mean_prest, avg_actual_var_prest, var_d_late_time_value,var_of_trial_means_prest
 
 
 
@@ -1317,6 +1437,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Random Walk Simulation from Config File")
     parser.add_argument('config_file', type=str,
                         help='Path to the YAML configuration file')
+    parser.add_argument('--analysis_mode', type=str, default='t_diff_D',
+                        choices=['t_diff_D', 'var_D'],
+                        help="Analysis mode: 't_diff_D' for t_diff and mean D, 'var_D' for variance of D.")
     args = parser.parse_args()  # args now only contains args.config_file
 
     # --- Load Configuration from YAML File ---
@@ -1405,22 +1528,22 @@ if __name__ == "__main__":
     selected_disorder_func = None
     disorder_mode = 'none'  # Default
 
+    current_disorder_mode = 'none' # Default
     if disorder_type != 'none':
-        if disorder_type in AVAILABLE_STANDARD_DISORDER_FUNCTIONS:
-            selected_disorder_func = AVAILABLE_STANDARD_DISORDER_FUNCTIONS[disorder_type]
-            disorder_mode = 'standard'
-        elif disorder_type in AVAILABLE_DIRECTION_DISORDER_FUNCTIONS:
-            selected_disorder_func = AVAILABLE_DIRECTION_DISORDER_FUNCTIONS[disorder_type]
-            disorder_mode = 'direction_only'
-            if use_ctrw:  # Disable CTRW if only directional disorder
+        if disorder_type in AVAILABLE_STANDARD_DISORDER_FUNCTIONS: # Ensure this dict is defined/imported
+            current_disorder_mode = 'standard'
+        elif disorder_type in AVAILABLE_DIRECTION_DISORDER_FUNCTIONS: # Ensure this dict is defined/imported
+            current_disorder_mode = 'direction_only'
+            # This assumes use_ctrw is loaded from config before this block
+            if 'use_ctrw' in locals() and use_ctrw: # Check if use_ctrw is defined
                 print("Warning: CTRW disabled because 'direction_only' disorder mode selected.")
                 use_ctrw = False
         else:
-            print(
-                f"Error: Unknown disorder type '{disorder_type}'. Available: {list(ALL_AVAILABLE_DISORDER_FUNCTIONS.keys())}")
-            import sys;
+            # This case might have been handled by your original script's error checking
+            # for unknown disorder types. If not, add appropriate error handling or fallback.
+            print(f"Warning: Unknown disorder type '{disorder_type}' found in config. Using 'none' mode.")
+            current_disorder_mode = 'none'
 
-            sys.exit(1)
 
 
     # Animation Params
@@ -1474,22 +1597,23 @@ if __name__ == "__main__":
     # --- Run Parallel Simulation ---
     print(f"\n--- Running Parallel Simulation ({trials} Trials) ---")
     # *** Use local variables loaded from config, NOT args.***
-    avg_msd, time_axis = main_parallel(
+    avg_msd, time_axis, avg_actual_mean_prest, avg_actual_var_prest, var_d_late_time, var_of_trial_means_prest = main_parallel(
         num_trials_total=trials, num_steps=steps, num_walkers=walkers, step=step_size, dt=dt,
-        disorder_type=disorder_type,  # Pass type name
-        disorder_params=disorder_params,
-        alpha_type=alpha_type,  # Pass type name
-        alpha_params=alpha_params,
-        disorder_mode=disorder_mode,
-        xv=XV, yv=YV, use_ctrw_flag=use_ctrw,
-        use_pbc_flag=use_pbc, check_bounds_flag=check_bounds
+        disorder_type=disorder_type, disorder_params=disorder_params,
+        alpha_type=alpha_type, alpha_params=alpha_params, # ensure alpha_type, alpha_params loaded
+        disorder_mode_config=current_disorder_mode, # Pass the determined disorder mode
+        xv=XV, yv=YV, use_ctrw_flag=use_ctrw, # ensure use_ctrw loaded
+        use_pbc_flag=use_pbc, check_bounds_flag=check_bounds, # ensure these loaded
+        analysis_mode_param=args.analysis_mode,
+        dt_sim_param=dt
     )
 
     # --- Quantitative Analysis ---
-    if avg_msd is not None and time_axis is not None:
-        print("\n" + "=" * 30)
-        print(" Quantitative Analysis Results")
-        print("=" * 30)
+    if args.analysis_mode == 't_diff_D':
+        if avg_msd is not None and time_axis is not None:
+            print("\n" + "=" * 30)
+            print(" Quantitative Analysis Results (t_diff_D mode)")
+            print("=" * 30)
 
         # Define fit range (e.g., last half of the data, avoiding first few points)
         # Ensure steps is defined correctly from your config loading
@@ -1735,8 +1859,23 @@ if __name__ == "__main__":
     else:
         print("Parallel simulation failed or produced no results, skipping analysis and plotting.")
 
+    # --- Output for run_parameter_sweep.py ---
+    if args.analysis_mode == 'var_D' and not np.isnan(var_d_late_time):
+        print(f"SWEEP_DATA_VAR_D_LATE_TIME:{var_d_late_time:.6e}")
+
+    if not np.isnan(avg_actual_mean_prest):
+        print(f"SWEEP_DATA_ACTUAL_MEAN_PREST:{avg_actual_mean_prest:.6f}")
+    if not np.isnan(avg_actual_var_prest):  # This is E[Var(rho|landscape)]
+        print(f"SWEEP_DATA_AVG_ACTUAL_VAR_PREST:{avg_actual_var_prest:.6f}")  # Changed prefix for clarity
+
+    # --- NEW: Print var_of_trial_means_prest ---
+    if not np.isnan(var_of_trial_means_prest):  # This is Var(E[rho|landscape])
+        print(f"SWEEP_DATA_VAR_OF_MEANS_PREST:{var_of_trial_means_prest:.6f}")
+    # --- END NEW ---
+
+
     # --- Save Data to File ---
-    if save_data_enabled:
+    if args.analysis_mode == 't_diff_D' and save_data_enabled:
         if avg_msd is not None and time_axis is not None:
             print(f"\n--- Saving Data to {save_data_filename} ---")
             try:
