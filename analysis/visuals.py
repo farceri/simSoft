@@ -173,6 +173,63 @@ def plotPacking(dirName, figureName, quiver=False, lj=False, shiftx=0, shifty=0,
     plt.savefig(figureName, transparent=True, format='png')
     plt.show()
 
+def plotParticles(ax, pos, rad, alpha = 0.6, lw = 0.3, annotate=False):
+    colorId = np.zeros((rad.shape[0], 4))
+    colorList = cm.get_cmap('viridis', rad.shape[0])
+    count = 0
+    for particleId in np.argsort(rad):
+        colorId[particleId] = colorList(count/rad.shape[0])
+        count += 1
+    for particleId in range(pos.shape[0]):
+        x = pos[particleId,0]
+        y = pos[particleId,1]
+        r = rad[particleId]
+        ax.add_artist(plt.Circle([x, y], r, edgecolor='k', facecolor=colorId[particleId], alpha=alpha, linewidth=lw))
+        if annotate:
+            ax.annotate(str(particleId), xy=(x, y), fontsize=4, verticalalignment='center', horizontalalignment='center')
+
+def getStepList(numFrames, firstStep, stepFreq):
+    maxStep = int(firstStep + stepFreq * numFrames)
+    stepList = np.arange(firstStep, maxStep, stepFreq, dtype=int)
+    if(stepList.shape[0] < numFrames):
+        numFrames = stepList.shape[0]
+    else:
+        stepList = stepList[-numFrames:]
+    return stepList
+
+def makePackingVideo(dirName, figureName, numFrames=20, firstStep=0, stepFreq=1e04, pbc=True):
+    def animate(i):
+        ax.clear()  # Clear the previous frame
+        setPackingAxes(boxSize, ax)
+        dirSample = dirName + os.sep + 't' + str(stepList[i])
+        if pbc:
+            pos = getPBCPositions(dirSample + os.sep + 'particlePos.dat', boxSize)
+        else:
+            pos = np.loadtxt(dirSample + os.sep + 'particlePos.dat')
+        plotParticles(ax, pos, rad)
+        plt.tight_layout()
+        return ax.artists
+    
+    frameTime = 120
+    stepList = getStepList(numFrames, firstStep, stepFreq)
+    print('Time list:', stepList)
+
+    boxSize = np.loadtxt(dirName + os.sep + 'boxSize.dat')
+    rad = np.array(np.loadtxt(dirName + os.sep + 'particleRad.dat'))
+
+    # Initialize figure and axis
+    fig, ax = plt.subplots(dpi=200)
+    # Create animation
+    numFrames = len(stepList) # One extra frame for the repeated first image
+    anim = animation.FuncAnimation(fig, animate, frames=numFrames, interval=frameTime, blit=False)
+    
+    # Set figure background to transparent
+    fig.patch.set_facecolor('none')
+
+    # Save the animation
+    anim.save(f'/home/francesco/Pictures/soft/packings/{figureName}.gif', writer='pillow', dpi=fig.dpi)
+    #anim.save(f'/home/francesco/Pictures/soft/packings/{figureName}.mov', writer='ffmpeg', dpi=fig.dpi)
+
 ########################## check energy conservation ##########################
 def plotEnergy(dirName, figureName):
     if(os.path.exists(dirName + os.sep + "energy.dat")):
@@ -283,6 +340,12 @@ if __name__ == '__main__':
 
     elif(whichPlot == 'plot2ljvel'):
         plotPacking(dirName, figureName, double=True, lj=True, numA=int(sys.argv[4]), quiver=True, shiftx=float(sys.argv[5]), shifty=float(sys.argv[6]))
+
+    elif(whichPlot == 'video'):
+        numFrames = int(sys.argv[4])
+        firstStep = float(sys.argv[5])
+        stepFreq = float(sys.argv[6])
+        makePackingVideo(dirName, figureName, numFrames, firstStep, stepFreq)
 
     elif(whichPlot == 'energy'):
         plotEnergy(dirName, figureName)
