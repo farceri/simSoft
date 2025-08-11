@@ -36,8 +36,8 @@ def verlet_integration_noise (mass, gamma, dt, N, numero_particelle, temperature
             v[i,:,j] = v[i-1,:,j] + 0.5*(langevin_force/ mass) * dt
             r[i,:,j] = r[i-1,:,j] + v[i-1,:,j]*dt +noise*dt
             msd[i,:,j]=(r[i,:,j]-r[0,:,j])**2
-            msd_xy[i,j] = (r[i,0,j] - r[0,1,j])**2
-            msd_yx[i,j] = (r[i,1,j] - r[0,0,j])**2
+            msd_xy[i,j] = (r[i,0,j] - r[0,0,j])*(r[i,1,j] - r[0,1,j])
+            msd_yx[i,j] = (r[i,1,j] - r[0,1,j])*(r[i,0,j] - r[0,0,j])
         # Media sulle particelle
         msd_media[i,:]=np.mean(msd[i,:,:], axis=1) 
         msd_xy_media[i] = np.mean(msd_xy[i,:], axis=0)
@@ -68,24 +68,24 @@ plt.figure(figsize=(10, 6))
 plt.subplot(2, 1, 1)
 plt.plot(time, msd_media[:,0])
 plt.xlabel('t')
-plt.ylabel('msd_xx')
-plt.title('msd_xx')
+plt.ylabel('msd_x')
+plt.title('msd_x')
 plt.subplot(2, 1, 2)
 plt.plot(np.log10(time), np.log10(msd_media[:,0]))
 plt.xlabel('log(t)')
-plt.ylabel('log(msd_xx)')
+plt.ylabel('log(msd_x)')
 plt.show()
 
 plt.figure(figsize=(10, 6))
 plt.subplot(2, 1, 1)
 plt.plot(time, msd_media[:,1])
 plt.xlabel('t')
-plt.ylabel('msd_yy')
-plt.title('msd_yy')
+plt.ylabel('msd_y')
+plt.title('msd_y')
 plt.subplot(2, 1, 2)
 plt.plot(np.log10(time), np.log10(msd_media[:,1]))
 plt.xlabel('log(t)')
-plt.ylabel('log(msd_yy)')
+plt.ylabel('log(msd_y)')
 plt.show()
 
 plt.figure(figsize=(10, 6))
@@ -151,7 +151,7 @@ print(f"y = {bx:.2f} * x")
 plt.yscale('log')
 plt.xscale('log')
 plt.plot(time[tempo_D:N-1], bx * time[tempo_D:N-1] + qx, color='purple', label='Fit y=a_x*t +q')
-plt.plot(time[tempo_D:N-1], D_xx_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_xx*2*t')
+plt.plot(time[tempo_D:N-1], D_xx_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_x*2*t')
 plt.legend()
 plt.xlabel("t")
 plt.ylabel("msd_xx")
@@ -174,7 +174,7 @@ print(f"y = {bx:.2f} * x")
 plt.yscale('log')
 plt.xscale('log')
 plt.plot(time[tempo_D:N-1], bx * time[tempo_D:N-1] + qx, color='purple', label='Fit y=a_x*t +q')
-plt.plot(time[tempo_D:N-1], D_yy_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_yy*2*t')
+plt.plot(time[tempo_D:N-1], D_yy_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_y*2*t')
 plt.legend()
 plt.xlabel("t")
 plt.ylabel("msd_yy")
@@ -235,14 +235,16 @@ print('D_yx_fit_ +/- error =',D_yx_fit, ' +/- ', error_D_yx_fit)
 plt.show()
 plt.close()
 
+#VERIFICA COEFFICIENTE D DIFFUSIONE
+D_verifica=(kB*temperature)/(gamma*mass)
+D=np.sqrt((D_xx)**2+ (D_yy)**2)
+print('D_verifica=',D_verifica)
+print('D=',D)
+
 #SALVATAGGIO COEFFICIENTI DI DIFFUSIONE
 fname_no_lorentz = "C:\\Users\\viviana\\Desktop\\simulazioni\\tesi\\coefficenti_di_diffusione.out"
 np.savetxt(fname_no_lorentz, (D_xx_media, D_yy_media, D_xy_media, D_yx_media, D_xx_fit,D_yy_fit,D_xy_fit,D_yx_fit,))
 
-
-#VERIFICA COEFFICIENTE D DIFFUSIONE
-D_verifica=(kB*temperature)/(gamma*mass)
-print('D_verifica=',D_verifica)
 
 
 #FORZA DI LORENTZ
@@ -266,8 +268,8 @@ def verlet_integration_noise_fl (mass, gamma, dt, N, numero_particelle, temperat
             v[i,:,j] = v[i-1,:,j] + 0.5*(langevin_force/ mass) * dt
             r[i,:,j] = r[i-1,:,j] + v[i-1,:,j]*dt +noise*dt
             msd[i,:,j]=(r[i,:,j] - r[0,:,j])**2
-            msd_xy[i,j] = (r[i,0,j] - r[0,1,j])**2
-            msd_yx[i,j] = (r[i,1,j] - r[0,0,j])**2
+            msd_xy[i,j] = (r[i,0,j] - r[0,0,j])*(r[i,1,j] - r[0,1,j])
+            msd_yx[i,j] = (r[i,1,j] - r[0,1,j])*(r[i,0,j] - r[0,0,j])
         # Media sulle particelle
         msd_media[i,:]=np.mean(msd[i,:,:], axis=1) 
         msd_xy_media[i] = np.mean(msd_xy[i], axis=0)
@@ -501,6 +503,7 @@ for k in range(len(Bz_values)):
     D_yx_fit_list.append(D_yx_fit)
     plt.show()
     plt.close()
+
 
 #SALVATAGGIO COEFFICIENTI DI DIFFUSIONE
 fname_lorentz = "C:\\Users\\viviana\\Desktop\\simulazioni\\tesi\\coefficenti_di_diffusione_fl.out"
