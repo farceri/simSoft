@@ -1,716 +1,592 @@
-import random
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from scipy.stats import norm
-import sys
-import sympy as sp
-from scipy.signal import butter, lfilter
+from scipy.optimize import curve_fit
 
-
-dt=0.001
-N= 100
 gamma=0.05 
-temperature=1.2
+t_diff=1/gamma
+print('t_diff=',t_diff)
+temperature=1e-3
 kB=1.0
-mass=1.0 
+mass=1
 sigma=np.sqrt(2*mass*gamma*kB*temperature)
-
-v_0x=13
-v_0y=20
-v_0=np.sqrt((v_0x)**2+(v_0y)**2)
-x_0=0
-
-#VERIFICA PDF RISPETTO A D_VV (GAUSSIANA)
-x_t=np.linspace(0,2000,1000)
-t_fiss=450
-def x_mediat(x_0,v_0,gamma,t_fiss):
-        return( x_0+(v_0/gamma)*(1-np.exp(-gamma*t_fiss))
-        )
-
-
-def MSDt(v_0,sigma,gamma,mass,t_fiss):
-        return(
-            ((sigma/gamma*t_fiss)**2)*t_fiss + (((sigma)**2)/(2*(mass**2)*(gamma**3)))*(4*np.exp(-gamma*t_fiss)-np.exp(-2*gamma*t_fiss)-3) + (v_0**2)*((1/gamma)*(np.exp(-gamma*t_fiss)-1))**2
-        )
-
-D_vv=((sigma)**2)/2
-
-varianza=4*D_vv*t_fiss
-if t_fiss >=200:
-       sigma1=varianza
-else:
-       sigma1=MSDt(v_0,sigma,gamma,mass,t_fiss)
-
-def pdf(sigma1,x_t,v_0,x_0,gamma,t_fiss):
-       media = x_mediat(x_0,v_0,gamma,t_fiss)
-       return ((1/np.sqrt(2*np.pi*(sigma1**2)))*np.exp(-((x_t-media)**2)/(2*sigma1**2)))
-
-
-print("Media = ", x_mediat(x_0,v_0,gamma,t_fiss))
-print("Sigma = ", sigma1)
-
-dati = np.random.normal(loc=x_mediat(x_0,v_0,gamma,t_fiss), scale=sigma1, size=10000)
-conteggi, bin_edges = np.histogram(dati, bins=50, density=True)
-bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-plt.plot(bin_centers, conteggi, label="Istogramma normalizzato")
-x = x_t
-plt.plot(x, norm.pdf(x, loc=x_mediat(x_0,v_0,gamma,t_fiss), scale=sigma1), label="PDF teorica", linestyle='dashed')
-plt.xlabel("r")
-plt.ylabel("Gaussiana")
-plt.legend()
-plt.grid(False)
-plt.show()
-
-
-#integrale energia senza rumore
-N = 1000        
-dt = 0.001        
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-v_0=np.array([v0,v0])
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-E = np.zeros(N)  
-msd=np.zeros(N)  
-r[0] = r_0     
-v[0] = v_0
-
-#integrazione verlet
-for i in range(1, N):
-       forza_trascinamento=-gamma * v[i-1]
-       kinetic_energy = 0.5 *mass *((np.linalg.norm(v[i-1]))** 2)
-       compute_msd=np.mean((r[i-1])**2)
-       v[i] = v[i-1] + 0.5*forza_trascinamento/ mass * dt
-       r[i] = r[i-1] + v[i-1]*dt
-       E[i] =kinetic_energy
-       msd[i]=compute_msd
-       
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione rispetto al tempo
-plt.subplot(2, 1, 1)
-plt.plot(time, r[:,0], label='componente x')
-plt.plot(time, r[:,1], label="componente y")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('posizione')
-# Grafico delle componenti della velocità rispetto al tempo
-plt.subplot(2, 1, 2)
-plt.plot(time, v[:,0], label='componente x')
-plt.plot(time, v[:,1], label="componente y")
-plt.xlabel('t')
-plt.ylabel('velocità')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-plt.figure(figsize=(10, 6))
-# Grafico msd rispetto al tempo
-plt.subplot(2, 1, 1)
-plt.plot(time, msd)
-plt.xlabel('t')
-plt.ylabel('msd')
-# Grafico dell'energia rispetto al tempo
-plt.subplot(2, 1, 2)
-plt.plot(time, E)
-plt.xlabel('t')
-plt.ylabel('k')
-plt.tight_layout()
-plt.show()
-
-
-
-#RUMORE
-N = 1000        
-dt = 0.001        
-time = np.arange(0, N*dt, dt)
-rumore=np.zeros(shape=(N,2))
-rumore[0]=0
-for i in range(1, N):
-       rumore_bianco=np.sqrt(2 * kB *temperature *gamma/dt)*np.array([np.random.normal(0,1),np.random.normal(0,1)])
-       rumore[i]=rumore_bianco*dt
-plt.figure(figsize=(10, 6))
-plt.plot(time, rumore[:,0], label='componente x')
-plt.plot(time, rumore[:,1], label="componente y")
-plt.xlabel('t')
-plt.ylabel('noise')
-plt.show()
-
-
+numero_particelle=100
 
 #INTEGRALE DELL'ENERGIA con il rumore(bidimensionale)
-N = 1000        
-dt = 0.001        
+N = 10000  
+dt = 0.1  
+tempo_totale=N*dt     
 time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-v_0=np.array([v0,v0])
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-E = np.zeros(N)  
-msd=np.zeros(N)  
-r[0] = r_0     
-v[0] = v_0
 
-#integrazione verlet
-for i in range(1, N):
-       noise=np.sqrt(2 * kB *temperature *gamma /dt)*np.array([np.random.normal(0,1),np.random.normal(0,1)])
-       forza_trascinamento=-gamma * v[i-1]
-       langevin_force=forza_trascinamento+noise
-       kinetic_energy = 0.5 *mass *((np.linalg.norm(v[i-1]))** 2)
-       compute_msd=np.mean((r[i-1])**2)
-       v[i] = v[i-1] + 0.5*langevin_force/ mass * dt
-       r[i] = r[i-1] + v[i-1]*dt +noise*dt
-       E[i] =kinetic_energy
-       msd[i]=compute_msd
-       
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione rispetto al tempo
-plt.subplot(2, 1, 1)
-plt.plot(time, r[:,0], label='componente x')
-plt.plot(time, r[:,1], label="componente y")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('posizione')
-# Grafico delle componenti della velocità rispetto al tempo
-plt.subplot(2, 1, 2)
-plt.plot(time, v[:,0], label='componente x')
-plt.plot(time, v[:,1], label="componente y")
-plt.xlabel('t')
-plt.ylabel('velocità')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-plt.figure(figsize=(10, 6))
-# Grafico msd rispetto al tempo
-plt.subplot(2, 1, 1)
-plt.plot(time, msd)
-plt.xlabel('t')
-plt.ylabel('msd')
-# Grafico dell'energia rispetto al tempo
-plt.subplot(2, 1, 2)
-plt.plot(time, E)
-plt.xlabel('t')
-plt.ylabel('k')
-plt.tight_layout()
-plt.show()
+    
+def verlet_integration_noise (mass, gamma, dt, N, numero_particelle, temperature, kB=1.0):
+    r=np.zeros(shape=(N,2,numero_particelle))
+    v=np.zeros(shape=(N,2,numero_particelle))
+    msd=np.zeros(shape=(N,2,numero_particelle))
+    msd_media=np.zeros(shape=(N,2))
+    msd_xy_media=np.zeros(shape=(N,1))
+    msd_yx_media=np.zeros(shape=(N,1))
+    msd_xy = np.zeros(shape=(N, numero_particelle))
+    msd_yx = np.zeros(shape=(N, numero_particelle))
+    for i in range(1, N):
+        #integrazione eulero
+        for j in range(0, numero_particelle):
+            noise=np.sqrt(2 * kB *temperature *gamma /dt)*np.array([np.random.normal(0,1),np.random.normal(0,1)])
+            forza_trascinamento=-gamma * v[i-1,:,j]
+            langevin_force=forza_trascinamento+noise
+            v[i,:,j] = v[i-1,:,j] + 0.5*(langevin_force/ mass) * dt
+            r[i,:,j] = r[i-1,:,j] + v[i-1,:,j]*dt +noise*dt
+            msd[i,:,j]=(r[i,:,j]-r[0,:,j])**2
+            msd_xy[i,j] = (r[i,0,j] - r[0,0,j])*(r[i,1,j] - r[0,1,j])
+            msd_yx[i,j] = (r[i,1,j] - r[0,1,j])*(r[i,0,j] - r[0,0,j])
+        # Media sulle particelle
+        msd_media[i,:]=np.mean(msd[i,:,:], axis=1) 
+        msd_xy_media[i] = np.mean(msd_xy[i,:], axis=0)
+        msd_yx_media[i] = np.mean(msd_yx[i,:], axis=0)
+    #
+    return r, v, msd, msd_xy, msd_yx, msd_media, msd_xy_media, msd_yx_media
 
 
-#integrale energia confronto con e senza rumore per componenti
-N = 1000        
-dt = 0.001        
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-v_0=np.array([v0,v0])
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-r_s=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-v_s=np.empty(shape=(N,2))
-E = np.zeros(N)
-E_s = np.zeros(N)  
-msd=np.zeros(N)  
-msd_s=np.zeros(N)  
-r[0] = r_0  
-r_s[0]=r_0   
-v[0] = v_0
-v_s[0]=v_0
+r, v, msd, msd_xy, msd_yx, msd_media, msd_xy_media, msd_yx_media = verlet_integration_noise(
+    mass, gamma, dt, N, numero_particelle, temperature, kB)
+
+def line_with_intercept_zero(x, b, q):
+    return x*b + q
 
 
-#integrazione verlet
-for i in range(1, N):
-       noise=np.sqrt(2 * kB *temperature *gamma /dt)*np.array([np.random.normal(0,1),np.random.normal(0,1)])
-       forza_trascinamento=-gamma * v[i-1]
-       langevin_force=forza_trascinamento+noise
-       kinetic_energy = 0.5 *mass *((np.linalg.norm(v[i-1]))** 2)
-       k_s=0.5 *mass *((np.linalg.norm(v_s[i-1]))** 2)
-       compute_msd=np.mean((r[i-1])**2)
-       c_msd_s=np.mean((r_s[i-1])**2)
-       v[i] = v[i-1] + 0.5*langevin_force/ mass * dt
-       v_s[i]=v_s[i-1] + 0.5*forza_trascinamento/ mass * dt
-       r[i] = r[i-1] + v[i-1]*dt +noise*dt
-       r_s[i] = r_s[i-1] + v_s[i-1]*dt 
-       E[i] =kinetic_energy
-       E_s[i] =k_s
-       msd[i]=compute_msd
-       msd_s[i]=c_msd_s
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione componente x
-plt.subplot(2, 1, 1)
-plt.plot(time, r_s[:,0], label='no noise')
-plt.plot(time, r[:,0], label="with noise")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('x')
-# Grafico delle componenti della posizione componente y
-plt.subplot(2, 1, 2)
-plt.plot(time, r_s[:,1], label='no noise')
-plt.plot(time, r[:,1], label="with noise")
-plt.xlabel('t')
-plt.legend()
+#Traiettoria
+plt.plot(r[:,0,0], r[:,1,0], label='particella 1')
+plt.plot(r[:,0,1], r[:,1,1], label='particella 2')
+plt.plot(r[:,0,2], r[:,1,2], label='particella 3')
+plt.xlabel('x')
 plt.ylabel('y')
-plt.subplots_adjust(hspace=0.3) 
+plt.title('Percorso di una particella')
+plt.axis('equal')
+plt.legend()
+plt.grid()
 plt.show()
 
 
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della velocità componente x
+#CALCOLO MSD
+plt.figure(figsize=(6, 6))
 plt.subplot(2, 1, 1)
-plt.plot(time, v_s[:,0], label='no noise')
-plt.plot(time, v[:,0], label="with noise")
+plt.plot(time, msd_media[:,0])
 plt.xlabel('t')
-plt.legend()
-plt.ylabel('v_x')
-# Grafico delle componenti della velocità componente y
+plt.ylabel('msd_x')
+plt.title('msd_x')
 plt.subplot(2, 1, 2)
-plt.plot(time, v_s[:,1], label='no noise')
-plt.plot(time, v[:,1], label="with noise")
+plt.xscale('log')
+plt.yscale('log')
+plt.plot(time, msd_media[:,0])
 plt.xlabel('t')
-plt.legend()
-plt.ylabel('v_y')
-plt.subplots_adjust(hspace=0.3)
+plt.ylabel('msd_x')
 plt.show()
 
-
-# Grafico msd rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.plot(time, msd_s, label='no noise')
-plt.plot(time,msd,label="with noise")
-plt.xlabel('t')
-plt.ylabel('msd')
-plt.legend()
-plt.show()
-
-
-# Grafico dell'energia rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.plot(time, E_s, label='no noise')
-plt.plot(time,E,label="with noise")
-plt.xlabel('t')
-plt.ylabel('E')
-plt.legend()
-plt.show()
-
-#lg eq m=0
-N = 1000        
-dt = 0.001
-gamma_1=200       
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-msd=np.zeros(N)  
-r[0] = r_0     
-
-#integrazione verlet
-for i in range(1, N):
-       noise=np.sqrt(2 * kB *temperature *gamma_1 /dt)*np.array([np.random.normal(0,1),np.random.normal(0,1)])
-       compute_msd=np.mean((r[i-1])**2)
-       r[i] = r[i-1] +(noise*dt)/gamma_1
-       msd[i]=compute_msd
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione rispetto al tempo
+plt.figure(figsize=(6, 6))
 plt.subplot(2, 1, 1)
-plt.plot(time, r[:,0], label='componente x')
-plt.plot(time, r[:,1], label="componente y")
+plt.plot(time, msd_media[:,1])
 plt.xlabel('t')
-plt.legend()
-plt.ylabel('posizione')
-
+plt.ylabel('msd_y')
+plt.title('msd_y')
 plt.subplot(2, 1, 2)
-plt.plot(time, msd)
+plt.xscale('log')
+plt.yscale('log')
+plt.plot(time,msd_media[:,1])
 plt.xlabel('t')
-plt.ylabel('msd')
+plt.ylabel('msd_y')
 plt.show()
+
+plt.figure(figsize=(6, 6))
+plt.subplot(2, 1, 1)
+plt.plot(time, msd_xy_media[:,:])
+plt.xlabel('t')
+plt.ylabel('msd_xy')
+plt.title('msd_xy,m_yx')
+plt.subplot(2, 1, 2)
+plt.plot(time, msd_yx_media[:,:])
+plt.xlabel('t')
+plt.ylabel('msd_yx')
+plt.show()
+
+
+#SELEZIONE VALORI MSD PER STIMA D
+plt.figure(figsize=(6, 6))
+plt.subplot(2, 1, 1)
+plt.plot(time, (msd_media[:,0]/time))
+plt.xlabel('t')
+plt.ylabel('msd_xx/t')
+plt.title('msd_xx/t,m_yy/t')
+plt.subplot(2, 1, 2)
+plt.plot(time,(msd_media[:,1]/time))
+plt.xlabel('t')
+plt.ylabel('msd_yy/t')
+plt.show()
+
+plt.figure(figsize=(6, 6))
+plt.subplot(2, 1, 1)
+plt.plot(time, (msd_xy_media[:,0]/time))
+plt.xlabel('t')
+plt.ylabel('msd_xy/t')
+plt.title('msd_xy/t,m_yx/t')
+plt.subplot(2, 1, 2)
+plt.plot(time,(msd_yx_media[:,0]/time))
+plt.xlabel('t')
+plt.ylabel('msd_yx/t')
+plt.show()
+
+
+
+#STIMA DEL COEFFICIENTE DI DIFFUSIONE DAL FIT
+#STIMA COEFFICIENTE DI DIFFUSIONE SECONDO METODO
+tempo_D=700
+D_xx=msd_media[tempo_D:N-1,0]/(2*(time[tempo_D:N-1]))
+D_xx_media=np.mean(D_xx)
+D_yy=msd_media[tempo_D:N-1,1]/(2*(time[tempo_D:N-1]))
+D_yy_media=np.mean(D_yy)
+D_xy=(msd_xy_media[tempo_D:N-1,0])/(2*(time[tempo_D:N-1]))
+D_xy_media=np.mean(D_xy)
+D_yx=(msd_yx_media[tempo_D:N-1,0])/(2*(time[tempo_D:N-1]))
+D_yx_media=np.mean(D_yx)
+
+#fit lineare componente xx con intercetta
+parameters, error = curve_fit(line_with_intercept_zero, time[tempo_D:N-1], msd_media[tempo_D:N-1,0])
+bx = parameters[0]
+qx = parameters[1]
+error_bx = np.sqrt(error[0,0])
+error_qx = np.sqrt(error[1,1])
+
+print(f"y = {bx:.2f} * x")
+plt.yscale('log')
+plt.xscale('log')
+plt.plot(time[tempo_D:N-1], msd_media[tempo_D:N-1,0], color='blue', label='msd__xx' )
+plt.plot(time[tempo_D:N-1], bx * time[tempo_D:N-1] + qx, color='purple', label='Fit y=a_x*t +q')
+plt.plot(time[tempo_D:N-1], D_xx_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_x*2*t')
+plt.legend()
+plt.xlabel("t")
+plt.ylabel("msd_xx")
+plt.title("Fit lineare con intercetta (y = ax +q)")
+plt.legend()
+D_xx_fit=bx/2
+error_D_xx_fit = error_bx/2
+print('D_xx=',D_xx_media)
+print('D_xx_fit_ +/- error =',D_xx_fit, ' +/- ', error_D_xx_fit)
+print('q =',bx, ' +/- ', error_bx)
+plt.show()
+
+#fit lineare componente yy con intercetta
+parameters, error = curve_fit(line_with_intercept_zero, time[tempo_D:N-1], msd_media[tempo_D:N-1,0])
+bx = parameters[0]
+qx = parameters[1]
+error_bx = np.sqrt(error[0,0])
+error_qx = np.sqrt(error[1,1])
+
+print(f"y = {bx:.2f} * x")
+plt.yscale('log')
+plt.xscale('log')
+plt.plot(time[tempo_D:N-1], msd_media[tempo_D:N-1,1], color='blue', label='msd__yy' )
+plt.plot(time[tempo_D:N-1], bx * time[tempo_D:N-1] + qx, color='purple', label='Fit y=a_x*t +q')
+plt.plot(time[tempo_D:N-1], D_yy_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_y*2*t')
+plt.legend()
+plt.xlabel("t")
+plt.ylabel("msd_yy")
+plt.title("Fit lineare con intercetta (y = ax +q)")
+plt.legend()
+#ricavo il coefficiente di diffusione dal fit
+D_yy_fit=bx/2
+error_D_yy_fit = error_bx/2
+print('D_yy=',D_yy_media)
+print('D_yy_fit_ +/- error =',D_yy_fit, ' +/- ', error_D_yy_fit)
+print('q =',bx, ' +/- ', error_bx)
+plt.show()
+
+#fit lineare componente xy con intercetta
+parameters, error = curve_fit(line_with_intercept_zero, time[tempo_D:N-1],msd_xy_media[tempo_D:N-1,0])
+bx = parameters[0]
+qx = parameters[1]
+error_bx = np.sqrt(error[0,0])
+error_qx = np.sqrt(error[1,1])
+
+print(f"y = {bx:.2f} * x")
+plt.yscale('log')
+plt.xscale('log')
+plt.plot(time[tempo_D:N-1], msd_xy_media[tempo_D:N-1], color='blue', label='msd__xy' )
+plt.plot(time[tempo_D:N-1], bx * time[tempo_D:N-1] + qx, color='purple', label='Fit y=a_x*t +q')
+plt.plot(time[tempo_D:N-1], D_xy_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_xy*2*t')
+plt.legend()
+plt.xlabel("t")
+plt.ylabel("msd_xy")
+plt.title("Fit lineare con intercetta (y = ax +q)")
+plt.legend()
+#ricavo il coefficiente di diffusione dal fit
+D_xy_fit=bx/2
+error_D_xy_fit = error_bx/2
+print('D_xy=',D_xy_media)
+print('D_xy_fit_ +/- error =',D_xy_fit, ' +/- ', error_D_xy_fit)
+print('q =',bx, ' +/- ', error_bx)
+plt.show()
+
+#fit lineare componente yx con intercetta
+parameters, error = curve_fit(line_with_intercept_zero, time[tempo_D:N-1],msd_yx_media[tempo_D:N-1,0])
+bx = parameters[0]
+qx = parameters[1]
+error_bx = np.sqrt(error[0,0])
+error_qx = np.sqrt(error[1,1])
+
+print(f"y = {bx:.2f} * x")
+plt.yscale('log')
+plt.xscale('log')
+plt.plot(time[tempo_D:N-1], msd_yx_media[tempo_D:N-1], color='blue', label='msd__yx' )
+plt.plot(time[tempo_D:N-1], bx * time[tempo_D:N-1] + qx, color='purple', label='Fit y=a_x*t +q')
+plt.plot(time[tempo_D:N-1], D_yx_media*2 * time[tempo_D:N-1], color='green', label='Fit y=D_yx*2*t')
+plt.legend()
+plt.xlabel("t")
+plt.ylabel("msd_yx")
+plt.title("Fit lineare con intercetta (y = ax +q)")
+plt.legend()
+D_yx_fit=bx/2
+error_D_yx_fit = error_bx/2
+print('D_yx=',D_yx_media)
+print('D_yx_fit_ +/- error =',D_yx_fit, ' +/- ', error_D_yx_fit)
+print('q =',bx, ' +/- ', error_bx)
+plt.show()
+plt.close()
+
+#VERIFICA COEFFICIENTE D DIFFUSIONE
+D_verifica=(kB*temperature)/(gamma*mass)
+D=np.sqrt((D_xx)**2+ (D_yy)**2)
+print('D_verifica=',D_verifica)
+print('D=',D)
+
+#SALVATAGGIO COEFFICIENTI DI DIFFUSIONE
+fname_no_lorentz = "C:\\Users\\viviana\\Desktop\\simulazioni\\tesi\\coefficenti_di_diffusione.out"
+np.savetxt(fname_no_lorentz, (D_xx_media, D_yy_media, D_xy_media, D_yx_media, D_xx_fit,D_yy_fit,D_xy_fit,D_yx_fit,))
+
+
 
 #FORZA DI LORENTZ
+def verlet_integration_noise_fl (mass, gamma, dt, N, numero_particelle, temperature, Bz1, q, kB=1.0):
+    r=np.zeros(shape=(N,2,numero_particelle))
+    v=np.zeros(shape=(N,2,numero_particelle)) 
+    msd=np.zeros(shape=(N,2,numero_particelle))
+    msd_xy=np.zeros(shape=(N,numero_particelle))
+    msd_yx=np.zeros(shape=(N,numero_particelle))
+    msd_media=np.zeros(shape=(N,2))
+    msd_xy_media=np.zeros(shape=(N,1))
+    msd_yx_media=np.zeros(shape=(N,1))
+    print("Verlet integration check, Bz = ", Bz1)
+    for i in range(1, N):
+        #integrazione eulero
+        for j in range(0, numero_particelle):
+            noise=np.sqrt(2 * kB * temperature * gamma / dt) * np.array(
+                [np.random.normal(0,1), np.random.normal(0,1)]
+            )
+            G=np.array([[gamma,-q*Bz1],[q*Bz1,gamma]])
+            forza_trascinamento=np.dot(-G , v[i-1,:,j])
+            langevin_force=forza_trascinamento+noise
+            v[i,:,j] = v[i-1,:,j] + 0.5*(langevin_force/ mass) * dt
+            r[i,:,j] = r[i-1,:,j] + v[i-1,:,j]*dt +noise*dt
+            msd[i,:,j]=(r[i,:,j] - r[0,:,j])**2
+            msd_xy[i,j] = (r[i,0,j] - r[0,0,j])*(r[i,1,j] - r[0,1,j])
+            msd_yx[i,j] = (r[i,1,j] - r[0,1,j])*(r[i,0,j] - r[0,0,j])
+        # Media sulle particelle
+        msd_media[i,:]=np.mean(msd[i,:,:], axis=1) 
+        msd_xy_media[i] = np.mean(msd_xy[i], axis=0)
+        msd_yx_media[i] = np.mean(msd_yx[i], axis=0)
+        
+    #
+    return r, v, msd, msd_xy, msd_yx, msd_media, msd_xy_media, msd_yx_media
+
+def line_with_intercept_zero_fl(x, b, q):
+    return x*b + q
+
+gamma=0.05 
+t_diff=1/gamma
+print('t_diff=',t_diff)
+temperature=1e-3
+kB=1.0
+mass=1
+sigma=np.sqrt(2*mass*gamma*kB*temperature)
+numero_particelle=100
+t_finale=800
+
 q=1
-v_fl=np.array([1,2,0])
-B=np.array([0,0,20])
-forza_di_lorentz=np.cross(q*v_fl,B)
-print('La forza di LORENTZ è:',forza_di_lorentz)
+Bz_values = np.array([0.00001,0.0001,0.001,0.01,0.1,0.5,0.8,1.0,1.2])
+#print('Bz_values', Bz_values)
+with open("C:\\Users\\viviana\\Desktop\\simulazioni\\tesi\\msd_data.npy", "wb") as f:
+    np.save(f, Bz_values)
+   
+    
+D_xx_media_list = []
+D_yy_media_list = []
+D_xy_media_list = []
+D_yx_media_list = []
+D_xx_fit_list = []
+D_yy_fit_list = []
+D_xy_fit_list = []
+D_yx_fit_list = []
 
-#integrale energia con forza di Lorentz
-N = 1000        
-dt = 0.001        
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-v_0=np.array([v0,v0])
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-E = np.zeros(N)  
-msd=np.zeros(N)  
-r[0] = r_0     
-v[0] = v_0
+for k in range(len(Bz_values)):
+    Bz = Bz_values[k]
+    B = np.array([0,0,Bz])
+    print('Bz=',Bz)
+    N = 10000
+    dt = 0.1  
+    tempo_totale=N*dt           
+    time = np.arange(0, N*dt, dt)
 
-#integrazione verlet
-for i in range(1, N):
-       noise=np.sqrt(2 * kB *temperature *gamma)*np.array([[np.random.normal(0,1),np.random.normal(0,1)]])
-       G=np.array([[gamma,-q*B[2]],[q*B[2],gamma]])
-       forza_trascinamento=np.dot(-G , v[i-1])
-       kinetic_energy = 0.5 *mass *((np.linalg.norm(v[i-1]))** 2)
-       compute_msd=np.mean((r[i-1])**2)
-       v[i] = v[i-1] + 0.5*forza_trascinamento/ mass * dt + noise
-       r[i] = r[i-1] + v[i-1]*dt +noise
-       E[i] =kinetic_energy
-       msd[i]=compute_msd
-       
+    r, v, msd, msd_xy, msd_yx, msd_media, msd_xy_media, msd_yx_media = verlet_integration_noise_fl(
+         mass, gamma, dt, N, numero_particelle, temperature, Bz, q)
+    
+    # Save the data
+    with open("C:\\Users\\viviana\\Desktop\\simulazioni\\tesi\\msd_data.npy", "ab") as f:
+        np.save(f, time[:])
+        np.save(f, msd_media[:,0])
+        np.save(f, msd_media[:,1])
+        np.save(f, msd_xy_media[:])
+        np.save(f, msd_yx_media[:])
+    
+    
+    
+    #Traiettoria
+    plt.plot(r[:,0,0], r[:,1,0])
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('Percorso di una particella, B_z={0:.5f}'.format(Bz))
+    plt.axis('equal')
+    plt.grid()
+    plt.show()
+    plt.close()
 
+    #CALCOLO MSD
+    plt.figure(figsize=(6, 6))
+    plt.subplot(2, 1, 1)
+    plt.plot(time, msd_media[:,0])
+    plt.xlabel('t')
+    plt.ylabel('msd_xx')
+    plt.title('msd_xx,B_z={0:.5f}'.format(Bz))
+    plt.subplot(2, 1, 2)
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.plot(time,msd_media[:,0])
+    plt.xlabel('t')
+    plt.ylabel('msd_xx')
+    plt.show()
+
+    plt.figure(figsize=(6, 6))
+    plt.subplot(2, 1, 1)
+    plt.plot(time, msd_media[:,1])
+    plt.xlabel('t')
+    plt.ylabel('msd_yy')
+    plt.title('msd_yy, B_z={0:.5f}'.format(Bz))
+    plt.subplot(2, 1, 2)
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.plot(time,msd_media[:,1])
+    plt.xlabel('t')
+    plt.ylabel('msd_yy')
+    plt.show()
+
+    plt.figure(figsize=(6, 6))
+    plt.subplot(2, 1, 1)
+    plt.plot(time, msd_xy_media[:,:])
+    plt.xlabel('t')
+    plt.ylabel('msd_xy')
+    plt.title('msd_xy, msd_yx. B_z={0:.5f}'.format(Bz))
+    plt.subplot(2, 1, 2)
+    plt.plot(time, msd_yx_media[:,:])
+    plt.xlabel('t')
+    plt.ylabel('msd_yx')
+    plt.show()
+
+    #SELEZIONE VALORI MSD PER STIMA D
+    plt.figure(figsize=(6, 6))
+    plt.subplot(2, 1, 1)
+    plt.plot(time, (msd_media[:,0]/time))
+    plt.xlabel('t')
+    plt.ylabel('msd_xx/t')
+    plt.title('msd_xx/t, msd_yy/t, B_z={0:.5f}'.format(Bz))
+    plt.subplot(2, 1, 2)
+    plt.plot(time,(msd_media[:,1]/time))
+    plt.xlabel('t')
+    plt.ylabel('msd_yy/t')
+    plt.show()
+
+    plt.figure(figsize=(6, 6))
+    plt.subplot(2, 1, 1)
+    plt.plot(time, (msd_xy_media[:,0]/time))
+    plt.xlabel('t')
+    plt.ylabel('msd_xy/t')
+    plt.title('msd_xy/t, msd_yx/t, B_z={0:.5f}'.format(Bz))
+    plt.subplot(2, 1, 2)
+    plt.plot(time,(msd_yx_media[:,0]/time))
+    plt.xlabel('t')
+    plt.ylabel('msd_yx/t')
+    plt.show()
+    
+
+    #STIMA DEL COEFFICIENTE DI DIFFUSIONE DAL FIT
+    #STIMA COEFFICIENTE DI DIFFUSIONE SECONDO METODO
+    tempo_D=200
+    tempo_f=800
+    D_xx=msd_media[tempo_D:tempo_f,0]/(2*(time[tempo_D:tempo_f]))
+    D_xx_media=np.mean(D_xx)
+    D_xx_media_list.append(D_xx_media)
+    D_yy=msd_media[tempo_D:tempo_f,1]/(2*(time[tempo_D:tempo_f]))
+    D_yy_media=np.mean(D_yy)
+    D_yy_media_list.append(D_yy_media)
+    D_xy=(msd_xy_media[tempo_D:tempo_f,0]*msd_yx_media[tempo_D:tempo_f,0])/(2*(time[tempo_D:tempo_f]))
+    D_xy_media=np.mean(D_xy)
+    D_xy_media_list.append(D_xy_media)
+    D_yx=(msd_yx_media[tempo_D:tempo_f,0]*msd_xy_media[tempo_D:tempo_f,0])/(2*(time[tempo_D:tempo_f]))
+    D_yx_media=np.mean(D_yx)
+    D_yx_media_list.append(D_yx_media)
+
+    #fit lineare componente xx con intercetta
+    
+    parameters, error = curve_fit(line_with_intercept_zero_fl, time[tempo_D:tempo_f], msd_media[tempo_D:tempo_f,0])
+    bx = parameters[0]
+    qx = parameters[1]
+    error_bx = np.sqrt(error[0,0])
+    error_qx = np.sqrt(error[1,1])
+
+    print(f"y = {bx:.5f} * x")
+    plt.yscale('log')
+    plt.xscale('log')
+    plt.plot(time[tempo_D:tempo_f], bx * time[tempo_D:tempo_f] + qx, color='purple', label='Fit y=a_x*t +q')
+    plt.plot(time[tempo_D:tempo_f], D_xx_media*2 * time[tempo_D:tempo_f], color='green', label='Fit y=D_xx*2*t')
+    plt.legend()
+    plt.xlabel("t")
+    plt.ylabel("msd_xx")
+    plt.title("Fit lineare con intercetta (y = ax +q), B_z={0:.5f}".format(Bz))
+    plt.legend()
+    D_xx_fit=bx/2
+    error_D_xx_fit = error_bx/2
+    print('D_xx=',D_xx_media)
+    print('D_xx_fit_ +/- error =',D_xx_fit, ' +/- ', error_D_xx_fit)
+    D_xx_fit_list.append(D_xx_fit)
+    print('q =',bx, ' +/- ', error_bx)
+    plt.show()
+    plt.close()
+
+    parameters, error = curve_fit(line_with_intercept_zero_fl, time[tempo_D:tempo_f], msd_media[tempo_D:tempo_f,0])
+    bx = parameters[0]
+    qx = parameters[1]
+    error_bx = np.sqrt(error[0,0])
+    error_qx = np.sqrt(error[1,1])
+
+    #fit lineare componente yy con intercetta
+    print(f"y = {bx:.5f} * x")
+    plt.yscale('log')
+    plt.xscale('log')
+    plt.plot(time[tempo_D:tempo_f], bx * time[tempo_D:tempo_f] + qx, color='purple', label='Fit y=a_x*t +q')
+    plt.plot(time[tempo_D:tempo_f], D_yy_media*2 * time[tempo_D:tempo_f], color='green', label='Fit y=D_yy*2*t')
+    plt.legend()
+    plt.xlabel("t")
+    plt.ylabel("msd_yy")
+    plt.title("Fit lineare con intercetta (y = ax +q),B_z={0:.5f}".format(Bz))
+    plt.legend()
+    #ricavo il coefficiente di diffusione dal fit
+    D_yy_fit=bx/2
+    error_D_yy_fit = error_bx/2
+    print('D_yy=',D_yy_media)
+    print('D_yy_fit_ +/- error =',D_yy_fit, ' +/- ', error_D_yy_fit)
+    D_yy_fit_list.append(D_yy_fit)
+    print('q =',bx, ' +/- ', error_bx)
+    plt.show()
+
+    #fit lineare componente xy con intercetta
+    parameters, error = curve_fit(line_with_intercept_zero_fl, time[tempo_D:tempo_f],msd_xy_media[tempo_D:tempo_f,0])
+    bx = parameters[0]
+    qx = parameters[1]
+    error_bx = np.sqrt(error[0,0])
+    error_qx = np.sqrt(error[1,1])
+
+    print(f"y = {bx:.5f} * x")
+    plt.yscale('log')
+    plt.xscale('log')
+    plt.plot(time[tempo_D:tempo_f], msd_xy_media[tempo_D:tempo_f],color='blue', label='dati' )
+    plt.plot(time[tempo_D:tempo_f], bx * time[tempo_D:tempo_f] + qx, color='purple', label='Fit y=a_x*t +q')
+    plt.plot(time[tempo_D:tempo_f], D_xy_media*2 * time[tempo_D:tempo_f], color='green', label='Fit y=D_xy*2*t')
+    plt.legend()
+    plt.xlabel("t")
+    plt.ylabel("msd_xy")
+    plt.title("Fit lineare con intercetta (y = ax +q),B_z={0:.5f}".format(Bz))
+    plt.legend()
+    #ricavo il coefficiente di diffusione dal fit
+    D_xy_fit=bx/2
+    error_D_xy_fit = error_bx/2
+    print('D_xy=',D_xy_media)
+    print('D_xy_fit_ +/- error =',D_xy_fit, ' +/- ', error_D_xy_fit)
+    D_xy_fit_list.append(D_xy_fit)
+    print('q =',bx, ' +/- ', error_bx)
+    plt.show()
+
+
+    #fit lineare componente yx con intercetta
+    parameters, error = curve_fit(line_with_intercept_zero_fl, time[tempo_D:tempo_f],msd_yx_media[tempo_D:tempo_f,0])
+    bx = parameters[0]
+    qx = parameters[1]
+    error_bx = np.sqrt(error[0,0])
+    error_qx = np.sqrt(error[1,1])
+
+    print(f"y = {bx:.5} * x")
+    plt.yscale('log')
+    plt.xscale('log')
+    plt.plot(time[tempo_D:tempo_f], bx * time[tempo_D:tempo_f] + qx, color='purple', label='Fit y=a_x*t +q')
+    plt.plot(time[tempo_D:tempo_f], D_yx_media*2 * time[tempo_D:tempo_f], color='green', label='Fit y=D_yx*2*t')
+    plt.legend()
+    plt.xlabel("t")
+    plt.ylabel("msd_yx")
+    plt.title("Fit lineare con intercetta (y = ax +q), B_z={0:.5f}".format(Bz))
+    plt.legend()
+    D_yx_fit=bx/2
+    error_D_yx_fit = error_bx/2
+    print('D_yx=',D_yx_media)
+    print('D_yx_fit_ +/- error =',D_yx_fit, ' +/- ', error_D_yx_fit)
+    D_yx_fit_list.append(D_yx_fit)
+    print('q =',bx, ' +/- ', error_bx)
+    plt.show()
+    plt.close()
+
+
+#SALVATAGGIO COEFFICIENTI DI DIFFUSIONE
+fname_lorentz = "C:\\Users\\viviana\\Desktop\\simulazioni\\tesi\\coefficenti_di_diffusione_fl.out"
+np.savetxt(fname_lorentz, (Bz_values, D_xx_media_list, D_yy_media_list, D_xy_media_list, D_yx_media_list,
+     D_xx_fit_list, D_yy_fit_list, D_xy_fit_list, D_yx_fit_list))
+
+
+#COEFFICIENTE DI DIFFUSIONE RISPETTO AL CAMPO MAGNETICO
 plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione rispetto al tempo
 plt.subplot(2, 1, 1)
-plt.plot(time, r[:,0], label='componente x')
-plt.plot(time, r[:,1], label="componente y")
-plt.xlabel('t')
+plt.xscale('log')
+plt.plot(Bz_values, D_xx_media_list, label='D')
+plt.plot(Bz_values, D_xx_fit_list, label='D_fit')
+plt.xlabel('B_z')
+plt.ylabel('D_xx')
 plt.legend()
-plt.ylabel('posizione')
-# Grafico delle componenti della velocità rispetto al tempo
 plt.subplot(2, 1, 2)
-plt.plot(time, v[:,0], label='componente x')
-plt.plot(time, v[:,1], label="componente y")
-plt.xlabel('t')
-plt.ylabel('velocità')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-plt.figure(figsize=(10, 6))
-# Grafico msd rispetto al tempo
-plt.subplot(2, 1, 1)
-plt.plot(time, msd)
-plt.xlabel('t')
-plt.ylabel('msd')
-# Grafico dell'energia rispetto al tempo
-plt.subplot(2, 1, 2)
-plt.plot(time, E)
-plt.xlabel('t')
-plt.ylabel('k')
-plt.tight_layout()
-plt.show()
-
-#integrale energia confronto con e senza forza di lorentz per componenti
-N = 1000        
-dt = 0.001        
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-v_0=np.array([v0,v0])
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-r_fl=np.empty(shape=(N,2))
-v_fl=np.empty(shape=(N,2))
-r=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-E_fl = np.zeros(N)  
-msd_fl=np.zeros(N)  
-E = np.zeros(N)  
-msd=np.zeros(N)  
-r[0] = r_0     
-v[0] = v_0
-r_fl[0] = r_0     
-v_fl[0] = v_0
-
-
-#integrazione verlet
-for i in range(1, N):
-       noise=np.sqrt(2 * kB *temperature *gamma)*np.array([[np.random.normal(0,1),np.random.normal(0,1)]])
-       f_t=-gamma * v[i-1]
-       G=np.array([[gamma,-q*B[2]],[q*B[2],gamma]])
-       forza_trascinamento=np.dot(-G , v_fl[i-1])
-       kinetic_energy = 0.5 *mass *((np.linalg.norm(v_fl[i-1]))** 2)
-       k=0.5 *mass *((np.linalg.norm(v[i-1]))** 2)
-       compute_msd=np.mean((r_fl[i-1])**2)
-       c_msd=np.mean((r[i-1])**2)
-       v[i] = v[i-1] + 0.5*f_t/ mass * dt + noise
-       r[i] = r[i-1] + v[i-1]*dt +noise
-       v_fl[i] = v_fl[i-1] + 0.5*forza_trascinamento/ mass * dt + noise
-       r_fl[i] = r_fl[i-1] + v_fl[i-1]*dt +noise
-       E_fl[i] =kinetic_energy
-       msd_fl[i]=compute_msd
-       E[i] =k
-       msd[i]=c_msd
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione componente x
-plt.subplot(2, 1, 1)
-plt.plot(time, r[:,0], label='no lorentz_force')
-plt.plot(time, r_fl[:,0], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('x')
-# Grafico delle componenti della posizione componente y
-plt.subplot(2, 1, 2)
-plt.plot(time, r[:,1], label='no lorentz_force')
-plt.plot(time, r_fl[:,1], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('y')
-plt.subplots_adjust(hspace=0.3) 
-plt.show()
-
-# Grafico msd rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.plot(time, msd_fl, label='no lorentz_force')
-plt.plot(time,msd,label="with lorentz_force")
-plt.xlabel('t')
-plt.ylabel('msd')
-plt.legend()
-plt.show()
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della velocità componente x
-plt.subplot(2, 1, 1)
-plt.plot(time, v[:,0], label='no lorentz_force')
-plt.plot(time, v_fl[:,0], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('v_x')
-# Grafico delle componenti della velocità componente y
-plt.subplot(2, 1, 2)
-plt.plot(time, v[:,1], label='no lorentz_force')
-plt.plot(time, v_fl[:,1], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('v_y')
-plt.subplots_adjust(hspace=0.3)
-plt.show()
-
-# Grafico dell'energia rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.plot(time, E, label='no lorentz_force')
-plt.plot(time,E_fl,label="with lorentz_force")
-plt.xlabel('t')
-plt.ylabel('E')
-plt.legend()
-plt.show()
-
-
-#FP eq corrispondente
-G_s=np.linalg.inv(G)*np.matrix.transpose(np.linalg.inv(G))*gamma
-
-
-#CONFRONTO TRA TUTTI E TRE (LOGARITMICO)
-N = 1000        
-dt = 0.001        
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-v_0=np.array([v0,v0])
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-v=np.empty(shape=(N,2))
-r_fl=np.empty(shape=(N,2))
-v_fl=np.empty(shape=(N,2))
-r_sn=np.empty(shape=(N,2))
-v_sn=np.empty(shape=(N,2))
-E_fl = np.zeros(N)  
-msd_fl=np.zeros(N)  
-E = np.zeros(N)  
-msd=np.zeros(N)  
-E_sn = np.zeros(N)  
-msd_sn=np.zeros(N)  
-r[0] = r_0     
-v[0] = v_0
-r_fl[0] = r_0     
-v_fl[0] = v_0
-r_sn[0] = r_0     
-v_sn[0] = v_0
-
-#integrazione verlet
-for i in range(1, N):
-       noise=np.sqrt(2 * kB *temperature *gamma)*np.array([[np.random.normal(0,1),np.random.normal(0,1)]])
-       f_t=-gamma * v[i-1]
-       G=np.array([[gamma,-q*B[2]],[q*B[2],gamma]])
-       forza_trascinamento=np.dot(-G , v_fl[i-1])
-       kinetic_energy = 0.5 *mass *((np.linalg.norm(v_fl[i-1]))** 2)
-       k=0.5 *mass *((np.linalg.norm(v[i-1]))** 2)
-       k_sn=0.5 *mass *((np.linalg.norm(v_sn[i-1]))** 2)
-       compute_msd=np.mean((r_fl[i-1])**2)
-       compute_msd_sn=np.mean((r_sn[i-1])**2)
-       c_msd=np.mean((r[i-1])**2)
-       v[i] = v[i-1] + 0.5*f_t/ mass * dt + noise
-       r[i] = r[i-1] + v[i-1]*dt +noise
-       v_sn[i] = v_sn[i-1] + 0.5*f_t/ mass * dt 
-       r_sn[i] = r_sn[i-1] + v_sn[i-1]*dt 
-       v_fl[i] = v_fl[i-1] + 0.5*forza_trascinamento/ mass * dt + noise
-       r_fl[i] = r_fl[i-1] + v_fl[i-1]*dt +noise
-       E_fl[i] =kinetic_energy
-       msd_fl[i]=compute_msd
-       E[i] =k
-       msd[i]=c_msd
-       E_sn[i] =k_sn
-       msd_sn[i]=compute_msd_sn
-
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione componente x
-plt.subplot(2, 1, 1)
-plt.plot(time, r_sn[:,0], label="no noise")
-plt.plot(time, r[:,0], label='no lorentz_force')
-plt.plot(time, r_fl[:,0], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('x')
-# Grafico delle componenti della posizione componente y
-plt.subplot(2, 1, 2)
-plt.plot(time, r_sn[:,1], label="no noise")
-plt.plot(time, r[:,1], label='no lorentz_force')
-plt.plot(time, r_fl[:,1], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('y')
-plt.subplots_adjust(hspace=0.3) 
-plt.show()       
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione componente x
-plt.subplot(2, 1, 1)
-plt.yscale('log')
-plt.plot(time, r_sn[:,0], label="no noise")
-plt.plot(time, r[:,0], label='no lorentz_force')
-plt.plot(time, r_fl[:,0], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('x')
-# Grafico delle componenti della posizione componente y
-plt.subplot(2, 1, 2)
-plt.yscale('log')
-plt.plot(time, r_sn[:,1], label="no noise")
-plt.plot(time, r[:,1], label='no lorentz_force')
-plt.plot(time, r_fl[:,1], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('y')
-plt.subplots_adjust(hspace=0.3) 
-plt.show()
-
-# Grafico msd rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.plot(time,msd_sn,label="no noise")
-plt.plot(time, msd_fl, label='no lorentz_force')
-plt.plot(time,msd,label="with lorentz_force")
-plt.xlabel('t')
-plt.ylabel('msd')
-plt.legend()
-plt.show()
-
-plt.figure(figsize=(8, 6))
-plt.yscale('log')
-plt.plot(time,msd_sn,label="no noise")
-plt.plot(time, msd_fl, label='no lorentz_force')
-plt.plot(time,msd,label="with lorentz_force")
-plt.xlabel('t')
-plt.ylabel('msd')
+plt.xscale('log')
+plt.plot(Bz_values, D_yy_media_list, label='D')
+plt.plot(Bz_values, D_yy_fit_list, label='D_fit')
+plt.xlabel('B_z')
+plt.ylabel('D_yy')
 plt.legend()
 plt.show()
 
 plt.figure(figsize=(10, 6))
-# Grafico delle componenti della velocità componente x
 plt.subplot(2, 1, 1)
-plt.plot(time, v_sn[:,0], label='no noise')
-plt.plot(time, v[:,0], label='no lorentz_force')
-plt.plot(time, v_fl[:,0], label="with lorentz_force")
-plt.xlabel('t')
+plt.xscale('log')
+#plt.plot(Bz_values, D_xy_media_list, label='D')
+plt.plot(Bz_values, D_xy_fit_list, label='D_fit')
+plt.xlabel('B_z')
+plt.ylabel('D_xy')
 plt.legend()
-plt.ylabel('v_x')
-# Grafico delle componenti della velocità componente y
 plt.subplot(2, 1, 2)
-plt.plot(time, v_sn[:,1], label='no noise')
-plt.plot(time, v[:,1], label='no lorentz_force')
-plt.plot(time, v_fl[:,1], label="with lorentz_force")
-plt.xlabel('t')
+plt.xscale('log')
+#plt.plot(Bz_values, D_yx_media_list, label='D')
+plt.plot(Bz_values, D_yx_fit_list, label='D_fit')
+plt.xlabel('B_z')
+plt.ylabel('D_yx')
 plt.legend()
-plt.ylabel('v_y')
-plt.subplots_adjust(hspace=0.3)
-plt.show()
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della velocità componente x
-plt.subplot(2, 1, 1)
-plt.yscale('log')
-plt.plot(time, v_sn[:,0], label='no noise')
-plt.plot(time, v[:,0], label='no lorentz_force')
-plt.plot(time, v_fl[:,0], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('v_x')
-# Grafico delle componenti della velocità componente y
-plt.subplot(2, 1, 2)
-plt.yscale('log')
-plt.plot(time, v_sn[:,1], label='no noise')
-plt.plot(time, v[:,1], label='no lorentz_force')
-plt.plot(time, v_fl[:,1], label="with lorentz_force")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('v_y')
-plt.subplots_adjust(hspace=0.3)
-plt.show()
-
-# Grafico dell'energia rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.plot(time, E_sn, label='no noise')
-plt.plot(time, E, label='no lorentz_force')
-plt.plot(time,E_fl,label="with lorentz_force")
-plt.xlabel('t')
-plt.ylabel('E')
-plt.legend()
-plt.show()
-
-# Grafico dell'energia rispetto al tempo
-plt.figure(figsize=(8, 6))
-plt.yscale('log')
-plt.plot(time, E_sn, label='no noise')
-plt.plot(time, E, label='no lorentz_force')
-plt.plot(time,E_fl,label="with lorentz_force")
-plt.xlabel('t')
-plt.ylabel('E')
-plt.legend()
-plt.show()
-
-
-#lg eq m=0
-N = 1000        
-dt = 0.001
-gamma_1=50       
-time = np.arange(0, N*dt, dt)
-v0=np.sqrt(kB *temperature /mass)
-r_0=np.array([0,0])
-r=np.empty(shape=(N,2))
-rumore=np.empty(shape=(N,2))
-msd=np.zeros(N)  
-r[0] = r_0     
-
-#integrazione verlet
-for i in range(1, N):
-       G=np.array([[gamma,-q*B[2]],[q*B[2],gamma]])
-       G_inv=np.linalg.inv(G)
-       G_inv_t=np.transpose(G_inv)
-       eta=np.array([np.random.normal(0,1),np.random.normal(0,1)]) 
-       noise=np.sqrt(2 * kB *temperature*gamma/dt)*np.dot(G_inv_t , eta)
-       compute_msd=np.mean((r[i-1])**2)
-       rumore[i]=noise
-       r[i] = r[i-1] +rumore[i-1]*dt
-       msd[i]=compute_msd
-
-plt.figure(figsize=(10, 6))
-# Grafico delle componenti della posizione rispetto al tempo
-plt.subplot(2, 1, 1)
-plt.plot(time, r[:,0], label='componente x')
-plt.plot(time, r[:,1], label="componente y")
-plt.xlabel('t')
-plt.legend()
-plt.ylabel('posizione')
-
-plt.subplot(2, 1, 2)
-plt.plot(time, msd)
-plt.xlabel('t')
-plt.ylabel('msd')
 plt.show()
 
 
