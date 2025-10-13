@@ -5,10 +5,13 @@ from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 import time
 np.random.seed(0)
-# python3 md.py '/home/auroisflying/gitThesis/simSoft/pyDiff/test' 'nve' 25 150 10000
+# python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 10 0.1 10000
+# WORK IN PROGRESS
 
 class MolecularDynamics:
-    def __init__(self, num_particles=100, temperature=0.1, dt=0.001, gamma=1.0, mass=1.0, Lx=20, Ly=20, interaction=False):
+
+    def __init__(self, num_particles=100, temperature=0.1, dt=0.001, gamma=1.0, mass=1.0, Lx=10, Ly=10, interaction=False):
+
         self.num_particles = num_particles
         self.mass = mass
         self.dt = dt
@@ -18,7 +21,8 @@ class MolecularDynamics:
         self.mean_vel = np.sqrt(self.kB * self.temperature / self.mass)
         self.box_size = np.array([Lx, Ly])
         self.neighbours = [] # Initializing neighbour list
-        self.cutoff = self.box_size[0]/3 # Cutoff for disk neighbours
+        self.cutoff = 3 # Cutoff for disk neighbours
+        self.maxDist = 0 # Necessary for the force shift
         self.division = 10  # How much to devide the total space for cell neighbours
         self.sigma = 1  # Sigma value for LJ potential
         self.epsilon = 1  # Epsilon value for LJ potential
@@ -55,6 +59,7 @@ class MolecularDynamics:
     def compute_cell_neighbours(self):
         """"Computing nearest neighbours based on cell subdivision."""
 
+        self.maxDist = np.sqrt(2*(self.box_size/self.division)**2)
         self.neighbours = [] # Reset neighbours
         head = np.zeros((self.division, self.division), dtype=int)
         cell = np.zeros((self.num_particles, 2), dtype=int)
@@ -93,39 +98,33 @@ class MolecularDynamics:
         """"Computing nearest neighbours based on simple disk distance."""
 
         self.neighbours = [] # Reset neighbours
+        self.maxDist = self.cutoff
 
         for ii in range(self.num_particles):
                 ii_list = []
                 for jj in range(ii+1, self.num_particles):
-                    x = (self.positions[ii, 0] - self.positions[jj, 0])
-                    x -= (np.round(x/self.box_size[0]))*self.box_size[0]
-                    y = (self.positions[ii, 1] - self.positions[jj, 1])
-                    y -= (np.round(y/self.box_size[1]))*self.box_size[1]
-                    dist = np.sqrt(x**2 + y**2)
-                    if dist < self.cutoff:
+                    distances = self.positions[ii] - self.positions[jj]
+                    distances = distances - (np.round(distances/self.box_size)) * self.box_size
+                    distance = np.sqrt(np.sum(distances**2))
+                    if distance < self.cutoff:
                         ii_list.append(jj)
                 
                 self.neighbours.append(ii_list.copy())
 
     def compute_forces(self):
-        """Forces using LJ potential."""
+        """Shifted forces using LJ potential."""
 
+        adj = (4*self.epsilon/self.maxDist) * ((12*(self.sigma/self.maxDist)**12)-(6*(self.sigma/self.maxDist)**6))
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
-
         for ii in range(self.num_particles):
             for jj in self.neighbours[ii]:
-            #for jj in range(self.num_particles):
-                x = (self.positions[ii, 0] - self.positions[jj, 0])
-                x -= (np.round(x/self.box_size[0]))*self.box_size[0]
-                y = (self.positions[ii, 1] - self.positions[jj, 1])
-                y -= (np.round(y/self.box_size[1]))*self.box_size[1]
-                dist = np.sqrt(x**2 + y**2)
-                if dist > 0:
-                #if 0 < dist <= (2**(1/6)*sigma):
-                    self.forces[ii, 0] += (x/dist) * (4*self.epsilon/dist) * ((12*(self.sigma/dist)**12)-(6*(self.sigma/dist)**6)) 
-                    self.forces[ii, 1] += (y/dist) * (4*self.epsilon/dist) * ((12*(self.sigma/dist)**12)-(6*(self.sigma/dist)**6)) 
-                    self.forces[jj, 0] -= (x/dist) * (4*self.epsilon/dist) * ((12*(self.sigma/dist)**12)-(6*(self.sigma/dist)**6)) 
-                    self.forces[jj, 1] -= (y/dist) * (4*self.epsilon/dist) * ((12*(self.sigma/dist)**12)-(6*(self.sigma/dist)**6)) 
+                distances = self.positions[ii] - self.positions[jj]
+                distances = distances - (np.round(distances/self.box_size)) * self.box_size
+                distance = np.sqrt(np.sum(distances**2))
+                if distance > 0:
+                    LJforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) - adj
+                    self.forces[ii] = self.forces[ii] + (distances/distance) * LJforce
+                    self.forces[jj] = self.forces[jj] - (distances/distance) * LJforce
 
     def langevin_force(self):
         """Compute stochastic white noise and friction forces."""
@@ -154,29 +153,26 @@ class MolecularDynamics:
         kinetic_energy = 0.5 * self.mass * np.sum(self.velocities ** 2)
         return kinetic_energy / self.num_particles
 
-    def compute_totalenergy(self):
-        """Compute the total energy of the system (kinetic + potential)."""
+    def compute_potentialenergy(self):
 
-        kinetic_energy = 0.5 * self.mass * np.sum(self.velocities ** 2)
         potential_energy = 0
-
         for ii in range(self.num_particles):
             for jj in self.neighbours[ii]:
-                x = (self.positions[ii, 0] - self.positions[jj, 0])
-                x -= (np.round(x/self.box_size[0]))*self.box_size[0]
-                y = (self.positions[ii, 1] - self.positions[jj, 1])
-                y -= (np.round(y/self.box_size[1]))*self.box_size[1]
-                dist = np.sqrt(x**2 + y**2)
-                potential_energy += 4*self.epsilon*((self.sigma/dist)**12-(self.sigma/dist)**6) 
+                distances = self.positions[ii] - self.positions[jj]
+                distances = distances - (np.round(distances/self.box_size)) * self.box_size
+                distance = np.sqrt(np.sum(distances**2))
+                potential_energy += 4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) 
 
-        return potential_energy + kinetic_energy
+        return potential_energy
+    
+    def compute_kineticenergy(self):
+        return (0.5 * self.mass * np.sum(self.velocities ** 2))
 
     def compute_msd(self):
         """Compute the mean squared displacement."""
         displacement = self.positions - self.initial_positions
         msd = np.mean(np.sum(displacement ** 2, axis=1))
         return msd
-
 
 def part_evolution(num_particles, positions, md, points, step):
     """Animation of the particles."""
@@ -249,7 +245,8 @@ if __name__ == '__main__':
     # Create arrays for storing energy and msd
     temp = np.empty(0)
     msd = np.empty(0)
-    energy = np.empty(0)
+    potential = np.empty(0)
+    kinetic = np.empty(0)
     total = np.zeros((md.initial_positions.shape[0], md.initial_positions.shape[1], num_steps + save_freq))
     total[:, :, 0] = md.initial_positions
     # Run integration, store and print data at given frequency
@@ -265,28 +262,32 @@ if __name__ == '__main__':
         if step % save_freq == 0:
             temp = np.append(temp, md.compute_temperature())
             msd = np.append(msd, md.compute_msd())
-            energy = np.append(energy, md.compute_totalenergy())
+            potential = np.append(potential, md.compute_potentialenergy())
+            kinetic = np.append(kinetic, md.compute_kineticenergy())
         if step % print_freq == 0:    
-            print(f"Step {step}: Kinetic = {temp[-1]*md.num_particles:.4f}, Total = {energy[-1]:.4f}")
+            print(f"Step {step}: Kinetic = {kinetic[-1]:.4f}, Total = {potential[-1]+kinetic[-1]:.4f}")
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    part_evolution(num_particles, total, md, 1, 5)
+    #part_evolution(num_particles, total, md, 1, 50)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
-    np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((time, temp, energy)))
+    np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((time, temp, potential+kinetic)))
 
-    # Plot energy and msd versus time
-    fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
-    ax[0].plot(time, temp*md.num_particles, color='k', linestyle='solid', marker='o', markersize='4', fillstyle='none')
+    # Plot energy versus time
+    fig, ax = plt.subplots(3, 1, figsize = (7, 7), sharex = True, dpi = 120)
+    ax[0].plot(time, kinetic, color='k', linestyle='solid', marker='o', markersize='4', fillstyle='none')
     ax[0].tick_params(axis='both', labelsize=14)
     ax[0].set_ylabel("$Kinetic energy,$ $K$", fontsize=16)
-    ax[1].plot(time, energy, color='k', linewidth=0.9, linestyle='solid', marker='o', markersize='6', fillstyle='none')
+    ax[1].plot(time, potential, color='k', linewidth=0.9, linestyle='solid', marker='o', markersize='6', fillstyle='none')
     ax[1].tick_params(axis='both', labelsize=14)
-    ax[1].set_ylabel("$Total energy,$ $E_{tot}$", fontsize=16)
-    ax[1].set_xlabel("$Simulation$ $time,$ $t$", fontsize=16)
+    ax[1].set_ylabel("$Potential Energy,$ $U$", fontsize=16)
+    ax[2].plot(time, potential+kinetic, color='k', linewidth=0.9, linestyle='solid', marker='o', markersize='6', fillstyle='none')
+    ax[2].tick_params(axis='both', labelsize=14)
+    ax[2].set_ylabel("$Total Energy,$ $E_{tot}$", fontsize=16)
+    ax[2].set_xlabel("$Simulation$ $time,$ $t$", fontsize=16)
     plt.tight_layout()
     plt.subplots_adjust(hspace=0)
-    #plt.savefig("/home/auroisflying/myThesis/simSoft-main/pyDiff/test/energies.png", transparent=False, format="png")
-    plt.show()
+    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/energies.png", transparent=False, format="png")
+    #plt.show()
