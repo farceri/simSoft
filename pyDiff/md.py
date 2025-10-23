@@ -6,7 +6,6 @@ import matplotlib.animation as animation
 import time
 np.random.seed(0)
 # python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 10 0.1 10000
-# WORK IN PROGRESS
 
 class MolecularDynamics:
 
@@ -18,7 +17,6 @@ class MolecularDynamics:
         self.gamma = gamma  # Friction coefficient for Langevin dynamics
         self.temperature = temperature
         self.kB = 1.0  # Boltzmann constant (arbitrary units)
-        self.vel_var = self.kB * self.temperature / self.mass
         self.box_size = np.array([Lx, Ly])
         self.neighbours = [] # Initializing neighbour list
         self.cutoff = 4 # Cutoff for disk neighbours
@@ -33,9 +31,10 @@ class MolecularDynamics:
         # Initialize positions and velocities randomly
         self.positions = (np.random.rand(num_particles, 2) - 0.5) * self.box_size # Flat distribution in [0,1] and shifted/adjusted
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
-        self.velocities = np.random.normal(0, np.sqrt(self.vel_var), (self.num_particles, 2))
-        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles)
-        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2)))
+        self.velocities = np.random.normal(0, 1, (self.num_particles, 2)) # Maxwell-Boltmann
+        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+        # Re-sample outliers
+        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
         self.forces = np.zeros((num_particles, 2))
 
         # Set size for interacting particles - no force is implemented yet
@@ -114,7 +113,6 @@ class MolecularDynamics:
         """Shifted forces using LJ potential."""
 
         adj = (4*self.epsilon/self.maxDist) * ((12*(self.sigma/self.maxDist)**12)-(6*(self.sigma/self.maxDist)**6))
-        adj = 0
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
         for ii in range(self.num_particles):
             for jj in self.neighbours[ii]:
@@ -155,14 +153,14 @@ class MolecularDynamics:
     def compute_potentialenergy(self):
 
         potential_energy = 0
-        adj = 4*self.epsilon*((self.sigma/self.maxDist)**12-(self.sigma/self.maxDist)**6)
-        adj = 0
+        adj = 4 * self.epsilon * ((self.sigma/self.maxDist)**12-(self.sigma/self.maxDist)**6)
+        adjDer = (- 4 * self.epsilon * (12*((self.sigma/self.maxDist)**12)-6*((self.sigma/self.maxDist)**6))) / self.maxDist
         for ii in range(self.num_particles):
             for jj in self.neighbours[ii]:
                 distances = self.positions[ii] - self.positions[jj]
                 distances = distances - (np.round(distances/self.box_size)) * self.box_size
                 distance = np.sqrt(np.sum(distances**2))
-                potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - adj)
+                potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - adj - ((distance - self.maxDist)*adjDer))
 
         return potential_energy
     
@@ -236,7 +234,7 @@ if __name__ == '__main__':
     num_steps = int(float(sys.argv[5])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    neighbour_update = 10
+    neighbour_update = 3
     
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature)
@@ -268,7 +266,7 @@ if __name__ == '__main__':
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    # part_evolution(num_particles, total, md, 1, 70)
+    part_evolution(num_particles, total, md, 1, 1)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
@@ -292,15 +290,18 @@ if __name__ == '__main__':
 
     # Plotting the potential, force and cutoff
     fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
-    dist = np.linspace(md.sigma*0.99, md.box_size[0]/2, 1000)
+    dist = np.linspace(md.sigma*0.99, md.cutoff, 1000)
     ax[0].axhline(y=0, color="gray", linestyle="--")
     ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
-    ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6))
-    ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)))
+    ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
+    ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
+    ax[0].legend()
     ax[1].axhline(y=0, color="gray", linestyle="--")
     ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
-    ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))))
-    ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))))
+    ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
+    ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
+    ax[1].set_ylim(top=3)
+    ax[1].legend()
     plt.tight_layout()
     plt.subplots_adjust(hspace=0)
     plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/potential.png", transparent=False, format="png")
