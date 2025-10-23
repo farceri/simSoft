@@ -19,21 +19,36 @@ class MolecularDynamics:
         self.kB = 1.0  # Boltzmann constant (arbitrary units)
         self.box_size = np.array([Lx, Ly])
         self.neighbours = [] # Initializing neighbour list
-        self.cutoff = 4 # Cutoff for disk neighbours
-        self.maxDist = 0 # Necessary for the force shift
+        self.cutoff = 3 # Cutoff for disk neighbours
         self.division = 10  # How much to devide the total space for cell neighbours
+        self.maxDist = np.minimum(self.cutoff, np.sqrt(2*(self.box_size[0]/self.division)**2)) # Necessary for the force shift
         self.sigma = 1  # Sigma value for LJ potential
         self.epsilon = 1  # Epsilon value for LJ potential
         print(f"Created md object with settings:")
         print(f"Number of particles: {self.num_particles:d}\nTemperature: {self.temperature:.4f}")
         print(f"Time step: {self.dt:.4f}\nBox size: Lx {Lx:.4f} and Ly {Ly:.4f}")
         
-        # Initialize positions and velocities randomly
-        self.positions = (np.random.rand(num_particles, 2) - 0.5) * self.box_size # Flat distribution in [0,1] and shifted/adjusted
+        # Initialize positions in a grid 
+        nSide = int(np.ceil(np.sqrt(self.num_particles)))
+        # Create grid positions
+        x = (np.arange(nSide) + 0.5) * (self.box_size[0]/nSide) - (self.box_size[0]/nSide)/2
+        y = (np.arange(nSide) + 0.5) * (self.box_size[1]/nSide) - (self.box_size[1]/nSide)/2
+        xv, yv = np.meshgrid(x, y)
+        positions = np.vstack([xv.ravel(), yv.ravel()]).T
+        # Only return the first num_particles if grid has extra points
+        self.positions = positions[:self.num_particles]
+
+        # Initialize positions
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
         self.velocities = np.random.normal(0, 1, (self.num_particles, 2)) # Maxwell-Boltmann
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
         # Re-sample outliers
+        vMax = (self.maxDist/2)
+        outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
+        while outliers.any():
+            self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
+            self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
         self.forces = np.zeros((num_particles, 2))
 
@@ -57,7 +72,7 @@ class MolecularDynamics:
     def compute_cell_neighbours(self):
         """"Computing nearest neighbours based on cell subdivision."""
 
-        self.maxDist = np.sqrt(2*(self.box_size/self.division)**2)
+        self.maxDist = np.sqrt(2*(self.box_size[0]/self.division)**2)
         self.neighbours = [] # Reset neighbours
         head = np.zeros((self.division, self.division), dtype=int)
         cell = np.zeros((self.num_particles, 2), dtype=int)
@@ -234,7 +249,7 @@ if __name__ == '__main__':
     num_steps = int(float(sys.argv[5])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    neighbour_update = 3
+    neighbour_update = 5
     
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature)
@@ -266,7 +281,7 @@ if __name__ == '__main__':
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    part_evolution(num_particles, total, md, 1, 1)
+    # part_evolution(num_particles, total, md, 1, 100)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
