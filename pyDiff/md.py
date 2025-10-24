@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 import time
 np.random.seed(0)
-# python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 10 0.1 10000
+# python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 20 100 10000
 
 class MolecularDynamics:
 
@@ -20,7 +20,7 @@ class MolecularDynamics:
         self.box_size = np.array([Lx, Ly])
         self.neighbours = [] # Initializing neighbour list
         self.cutoff = 3 # Cutoff for disk neighbours
-        self.division = 10  # How much to devide the total space for cell neighbours
+        self.division = 5  # How much to devide the total space for cell neighbours
         self.maxDist = np.minimum(self.cutoff, np.sqrt(2*(self.box_size[0]/self.division)**2)) # Necessary for the force shift
         self.sigma = 1  # Sigma value for LJ potential
         self.epsilon = 1  # Epsilon value for LJ potential
@@ -43,7 +43,7 @@ class MolecularDynamics:
         self.velocities = np.random.normal(0, 1, (self.num_particles, 2)) # Maxwell-Boltmann
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
         # Re-sample outliers
-        vMax = (self.maxDist/2)
+        vMax = (self.maxDist/3)
         outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
         while outliers.any():
             self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
@@ -76,12 +76,13 @@ class MolecularDynamics:
         self.neighbours = [] # Reset neighbours
         head = np.zeros((self.division, self.division), dtype=int)
         cell = np.zeros((self.num_particles, 2), dtype=int)
+        cell_check = np.zeros((self.division, self.division))
         list = np.zeros(self.num_particles, dtype=int)
         near_cells = [(1, 1), (1, 0), (1, -1), (0, 1)]
         other_cell = [0, 0]
 
         for ii in range(self.num_particles):
-            cell[ii, :] = np.floor((self.positions[ii, :] + 0.5)*(self.division)) # which cell ii belongs to
+            cell[ii, :] = np.floor((self.positions[ii, :] + 0.5)*(self.division/self.box_size[0])) # which cell ii belongs to
             list[ii] = head[cell[ii, 0], cell[ii, 1]] # point ii to previous head of the cell, 0 if it is first in cell
             head[cell[ii, 0], cell[ii, 1]] = ii # ii is now the new head of the cell
 
@@ -91,10 +92,11 @@ class MolecularDynamics:
             current_head = head[cell[ii, 0], cell[ii, 1]]
 
             # Neighbours in current cell
-            while current_head != 0: # if there are other neighbours...
+            while current_head != 0 and cell_check[current_cell] == 0: # if there are other neighbours and the cell wasn't checked...
                 if current_head != ii: # ...and it's not yourself
                     ii_list.append(current_head) # append neighbour
                 current_head = list[current_head] # next head in line
+            cell_check[current_cell] = 1
 
             # Neighbours in near cells
             for value in near_cells:
@@ -249,7 +251,7 @@ if __name__ == '__main__':
     num_steps = int(float(sys.argv[5])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    neighbour_update = 5
+    neighbour_update = 1
     
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature)
@@ -264,8 +266,8 @@ if __name__ == '__main__':
     # Run integration, store and print data at given frequency
     for step in range(num_steps + save_freq):
         if step % neighbour_update == 0:
-            md.compute_disk_neighbours()
-            #md.compute_cell_neighbours()
+            #md.compute_disk_neighbours()
+            md.compute_cell_neighbours()
         if integrator == 'nve':
             md.velocity_verlet_nve()
             total[:, :, step] = md.positions
@@ -281,7 +283,7 @@ if __name__ == '__main__':
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    # part_evolution(num_particles, total, md, 1, 100)
+    part_evolution(num_particles, total, md, 1, 20)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
