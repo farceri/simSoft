@@ -35,11 +35,12 @@ class MolecularDynamics:
         y = (np.arange(nSide) + 0.5) * (self.box_size[1]/nSide) - (self.box_size[1]/nSide)/2
         xv, yv = np.meshgrid(x, y)
         positions = np.vstack([xv.ravel(), yv.ravel()]).T
-        # Only return the first num_particles if grid has extra points
-        self.positions = positions[:self.num_particles]
-
-        # Initialize positions
+        positions = positions - (self.box_size[0]/2)*np.ones_like(positions)
+        positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
+        self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
+
+        # Initialize velocities
         self.velocities = np.random.normal(0, 1, (self.num_particles, 2)) # Maxwell-Boltmann
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
         # Re-sample outliers
@@ -72,7 +73,7 @@ class MolecularDynamics:
     def compute_cell_neighbours(self):
         """"Computing nearest neighbours based on cell subdivision."""
 
-        self.maxDist = np.sqrt(2*(self.box_size[0]/self.division)**2)
+        self.maxDist = np.sqrt(2*(2*self.box_size[0]/self.division)**2)
         self.neighbours = [] # Reset neighbours
         head = np.zeros((self.division, self.division), dtype=int)
         cell = np.zeros((self.num_particles, 2), dtype=int)
@@ -82,7 +83,7 @@ class MolecularDynamics:
         other_cell = [0, 0]
 
         for ii in range(self.num_particles):
-            cell[ii, :] = np.floor((self.positions[ii, :] + 0.5)*(self.division/self.box_size[0])) # which cell ii belongs to
+            cell[ii, :] = np.floor(((self.positions[ii, :] + 5)*self.division)/(self.box_size[0])) # which cell ii belongs to
             list[ii] = head[cell[ii, 0], cell[ii, 1]] # point ii to previous head of the cell, 0 if it is first in cell
             head[cell[ii, 0], cell[ii, 1]] = ii # ii is now the new head of the cell
 
@@ -307,14 +308,14 @@ if __name__ == '__main__':
 
     # Plotting the potential, force and cutoff
     fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
-    dist = np.linspace(md.sigma*0.99, md.cutoff, 1000)
+    dist = np.linspace(md.sigma*0.99, md.maxDist, 1000)
     ax[0].axhline(y=0, color="gray", linestyle="--")
-    ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
+    ax[0].axvline(x=md.maxDist, color="gray", linestyle="--")
     ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
     ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
     ax[0].legend()
     ax[1].axhline(y=0, color="gray", linestyle="--")
-    ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
+    ax[1].axvline(x=md.maxDist, color="gray", linestyle="--")
     ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
     ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
     ax[1].set_ylim(top=3)
