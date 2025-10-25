@@ -5,11 +5,11 @@ from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 import time
 np.random.seed(0)
-# python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 20 100 10000
+#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 20 10 10000
 
 class MolecularDynamics:
 
-    def __init__(self, num_particles=100, temperature=0.1, dt=0.001, gamma=1.0, mass=1.0, Lx=10, Ly=10, interaction=False):
+    def __init__(self, num_particles=100, temperature=0.1, dt=0.001, gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, interaction=False):
 
         self.num_particles = num_particles
         self.mass = mass
@@ -19,9 +19,9 @@ class MolecularDynamics:
         self.kB = 1.0  # Boltzmann constant (arbitrary units)
         self.box_size = np.array([Lx, Ly])
         self.neighbours = [] # Initializing neighbour list
-        self.cutoff = 3 # Cutoff for disk neighbours
-        self.division = 5  # How much to devide the total space for cell neighbours
-        self.maxDist = np.minimum(self.cutoff, np.sqrt(2*(self.box_size[0]/self.division)**2)) # Necessary for the force shift
+        self.cutoff = cutoff # Potential cutoff
+        self.skin = 0.3 * self.gamma
+        self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin)))  # How much to devide the total space for cell neighbours
         self.sigma = 1  # Sigma value for LJ potential
         self.epsilon = 1  # Epsilon value for LJ potential
         print(f"Created md object with settings:")
@@ -44,7 +44,7 @@ class MolecularDynamics:
         self.velocities = np.random.normal(0, 1, (self.num_particles, 2)) # Maxwell-Boltmann
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
         # Re-sample outliers
-        vMax = (self.maxDist/3)
+        vMax = self.cutoff/3
         outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
         while outliers.any():
             self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
@@ -73,40 +73,37 @@ class MolecularDynamics:
     def compute_cell_neighbours(self):
         """"Computing nearest neighbours based on cell subdivision."""
 
-        self.maxDist = np.sqrt(2*(2*self.box_size[0]/self.division)**2)
         self.neighbours = [] # Reset neighbours
-        head = np.zeros((self.division, self.division), dtype=int)
+        head = -np.ones((self.cellDivision, self.cellDivision), dtype=int)
         cell = np.zeros((self.num_particles, 2), dtype=int)
-        cell_check = np.zeros((self.division, self.division))
         list = np.zeros(self.num_particles, dtype=int)
         near_cells = [(1, 1), (1, 0), (1, -1), (0, 1)]
         other_cell = [0, 0]
 
         for ii in range(self.num_particles):
-            cell[ii, :] = np.floor(((self.positions[ii, :] + 5)*self.division)/(self.box_size[0])) # which cell ii belongs to
+            cell[ii, :] = np.floor(((self.positions[ii, :] + 5)*self.cellDivision)/(self.box_size[0])) # which cell ii belongs to
             list[ii] = head[cell[ii, 0], cell[ii, 1]] # point ii to previous head of the cell, 0 if it is first in cell
             head[cell[ii, 0], cell[ii, 1]] = ii # ii is now the new head of the cell
 
-        for ii in range(num_particles):
+        for ii in range(self.num_particles):
             ii_list = []
             current_cell = (cell[ii, 0], cell[ii, 1])
             current_head = head[cell[ii, 0], cell[ii, 1]]
 
             # Neighbours in current cell
-            while current_head != 0 and cell_check[current_cell] == 0: # if there are other neighbours and the cell wasn't checked...
-                if current_head != ii: # ...and it's not yourself
+            while current_head != -1: # if there are other neighbours and the cell wasn't checked...
+                if current_head > ii: # ...and it's not yourself (and no double count)
                     ii_list.append(current_head) # append neighbour
                 current_head = list[current_head] # next head in line
-            cell_check[current_cell] = 1
 
             # Neighbours in near cells
             for value in near_cells:
                 other_cell[0] = current_cell[0] + value[0]
                 other_cell[1] = current_cell[1] + value[1]
-                current_head = head[other_cell[0]%self.division, other_cell[1]%self.division]
-                while current_head != 0: # if there are other neighbours...
-                    ii_list.append(current_head) # append neighbour
-                    current_head = list[current_head] # next head in line
+                other_head = head[other_cell[0]%self.cellDivision, other_cell[1]%self.cellDivision]
+                while other_head != -1: # if there are other neighbours...
+                    ii_list.append(other_head) # append neighbour
+                    other_head = list[other_head] # next head in line
                     
             self.neighbours.append(ii_list.copy())
 
@@ -114,7 +111,6 @@ class MolecularDynamics:
         """"Computing nearest neighbours based on simple disk distance."""
 
         self.neighbours = [] # Reset neighbours
-        self.maxDist = self.cutoff
 
         for ii in range(self.num_particles):
                 ii_list = []
@@ -122,7 +118,7 @@ class MolecularDynamics:
                     distances = self.positions[ii] - self.positions[jj]
                     distances = distances - (np.round(distances/self.box_size)) * self.box_size
                     distance = np.sqrt(np.sum(distances**2))
-                    if distance < self.cutoff:
+                    if distance <= self.cutoff + self.skin:
                         ii_list.append(jj)
                 
                 self.neighbours.append(ii_list.copy())
@@ -130,16 +126,17 @@ class MolecularDynamics:
     def compute_forces(self):
         """Shifted forces using LJ potential."""
 
-        adj = (4*self.epsilon/self.maxDist) * ((12*(self.sigma/self.maxDist)**12)-(6*(self.sigma/self.maxDist)**6))
+        adj = (4*self.epsilon/self.cutoff) * ((12*(self.sigma/self.cutoff)**12)-(6*(self.sigma/self.cutoff)**6))
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
         for ii in range(self.num_particles):
             for jj in self.neighbours[ii]:
                 distances = self.positions[ii] - self.positions[jj]
                 distances = distances - (np.round(distances/self.box_size)) * self.box_size
                 distance = np.sqrt(np.sum(distances**2))
-                LJforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) - adj
-                self.forces[ii] = self.forces[ii] + ((distances/distance) * LJforce)
-                self.forces[jj] = self.forces[jj] - ((distances/distance) * LJforce)
+                if distance < self.cutoff:
+                    LJforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) - adj
+                    self.forces[ii] = self.forces[ii] + ((distances/distance) * LJforce)
+                    self.forces[jj] = self.forces[jj] - ((distances/distance) * LJforce)
 
     def langevin_force(self):
         """Compute stochastic white noise and friction forces."""
@@ -171,14 +168,15 @@ class MolecularDynamics:
     def compute_potentialenergy(self):
 
         potential_energy = 0
-        adj = 4 * self.epsilon * ((self.sigma/self.maxDist)**12-(self.sigma/self.maxDist)**6)
-        adjDer = (- 4 * self.epsilon * (12*((self.sigma/self.maxDist)**12)-6*((self.sigma/self.maxDist)**6))) / self.maxDist
+        adj = 4 * self.epsilon * ((self.sigma/self.cutoff)**12-(self.sigma/self.cutoff)**6)
+        adjDer = (- 4 * self.epsilon * (12*((self.sigma/self.cutoff)**12)-6*((self.sigma/self.cutoff)**6))) / self.cutoff
         for ii in range(self.num_particles):
             for jj in self.neighbours[ii]:
                 distances = self.positions[ii] - self.positions[jj]
                 distances = distances - (np.round(distances/self.box_size)) * self.box_size
                 distance = np.sqrt(np.sum(distances**2))
-                potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - adj - ((distance - self.maxDist)*adjDer))
+                if distance < self.cutoff:
+                    potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - adj - ((distance - self.cutoff)*adjDer))
 
         return potential_energy
     
@@ -195,8 +193,8 @@ def part_evolution(num_particles, positions, md, points, step):
     """Animation of the particles."""
 
     fig = plt.figure()
-    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/md.division, step=md.box_size[0]/md.division))
-    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/md.division, step=md.box_size[1]/md.division))
+    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/md.cellDivision, step=md.box_size[0]/md.cellDivision))
+    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/md.cellDivision, step=md.box_size[1]/md.cellDivision))
     plt.grid(color = 'lightgrey', linestyle = '--', linewidth = 0.5)
     scat_dic = {}
     line_dic = {}
@@ -205,7 +203,7 @@ def part_evolution(num_particles, positions, md, points, step):
         #line_dic["line{0}".format(ii)] = plt.plot(positions[ii, 0, 0], positions[ii, 1, 0])[0]       
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
-    plt.title("N=%d" %(md.num_particles))
+    plt.title(r"N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff))
     plt.xlabel("x")
     plt.ylabel("y")
     plt.gca().set_aspect('equal')
@@ -252,7 +250,7 @@ if __name__ == '__main__':
     num_steps = int(float(sys.argv[5])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    neighbour_update = 1
+    neighbour_update = 5
     
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature)
@@ -267,8 +265,8 @@ if __name__ == '__main__':
     # Run integration, store and print data at given frequency
     for step in range(num_steps + save_freq):
         if step % neighbour_update == 0:
-            #md.compute_disk_neighbours()
-            md.compute_cell_neighbours()
+            md.compute_disk_neighbours()
+            #md.compute_cell_neighbours()
         if integrator == 'nve':
             md.velocity_verlet_nve()
             total[:, :, step] = md.positions
@@ -284,7 +282,7 @@ if __name__ == '__main__':
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    part_evolution(num_particles, total, md, 1, 20)
+    # part_evolution(num_particles, total, md, 1, 30)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
@@ -308,14 +306,14 @@ if __name__ == '__main__':
 
     # Plotting the potential, force and cutoff
     fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
-    dist = np.linspace(md.sigma*0.99, md.maxDist, 1000)
+    dist = np.linspace(md.sigma*0.99, md.cutoff, 1000)
     ax[0].axhline(y=0, color="gray", linestyle="--")
-    ax[0].axvline(x=md.maxDist, color="gray", linestyle="--")
+    ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
     ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
     ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
     ax[0].legend()
     ax[1].axhline(y=0, color="gray", linestyle="--")
-    ax[1].axvline(x=md.maxDist, color="gray", linestyle="--")
+    ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
     ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
     ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
     ax[1].set_ylim(top=3)
