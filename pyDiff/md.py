@@ -4,7 +4,7 @@ import os
 from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 import time
-np.random.seed(0)
+# np.random.seed(0)
 #python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 20 10 10000
 
 class MolecularDynamics:
@@ -41,15 +41,15 @@ class MolecularDynamics:
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
 
         # Initialize velocities
-        self.velocities = np.random.normal(0, 1, (self.num_particles, 2)) # Maxwell-Boltmann
-        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-        # Re-sample outliers
+        self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
+        #self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+        """# Re-sample outliers
         vMax = self.cutoff/3
         outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
         while outliers.any():
             self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
             self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
+            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
         self.forces = np.zeros((num_particles, 2))
 
@@ -237,7 +237,7 @@ def part_evolution(num_particles, positions, md, points, step):
         #return ((line_dic["line{0}".format(ii)]) for ii in range(num_particles))
 
     ani = animation.FuncAnimation(fig = fig, func = update, frames = updated_positions.shape[2], blit=True)
-    #ani.save('images/animation.gif', writer='imagemagick', fps=30)
+    #ani.save('test/animation.gif', writer='imagemagick', fps=30)
     plt.show()
 
 if __name__ == '__main__':
@@ -282,7 +282,7 @@ if __name__ == '__main__':
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    # part_evolution(num_particles, total, md, 1, 30)
+    # part_evolution(num_particles, total, md, 1, 5)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
