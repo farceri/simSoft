@@ -172,8 +172,9 @@ class MolecularDynamics:
                     WCAforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) 
                     self.forces[ii] = self.forces[ii] + ((distances/distance) * WCAforce)
                     self.forces[jj] = self.forces[jj] - ((distances/distance) * WCAforce)
-                    self.forcesContainer.append(WCAforce)
-                    self.distancesContainer.append(distance)
+                    if (ii==0) and (jj==1):
+                        self.forcesContainer.append(WCAforce)
+                        self.distancesContainer.append(distance)
 
         self.potentialEnergy = potential_energy
 
@@ -365,8 +366,7 @@ if __name__ == '__main__':
     fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
     dist = np.linspace(md.sigma*0.9, md.cutoff, 1000)
     added = np.linspace(md.cutoff, md.cutoff*1.1, 1000)
-    forces, distances = reduce_vectors(md.forcesContainer, md.distancesContainer, 1e-06)
-    #ax[1].plot(md.distancesContainer, md.forcesContainer, color="black", linestyle="--")
+    #forces, distances = reduce_vectors(md.forcesContainer, md.distancesContainer, 1e-06)
     if md.potentialType == "WCA":
         ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential")
         ax[0].plot(added, 0*added, color="blue")
@@ -384,7 +384,7 @@ if __name__ == '__main__':
     ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
     ax[1].set_ylim(top=100)
     ax[1].axhline(y=0, color="gray", linestyle="--")
-    ax[1].plot(distances, forces, color="lime", linestyle="--", label="All meaned forces")
+    ax[1].plot(md.distancesContainer, md.forcesContainer, color="lime", linestyle="--", label="Sampled couple forces")
     ax[1].legend()
     ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
     plt.tight_layout()
