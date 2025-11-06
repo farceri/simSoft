@@ -20,14 +20,14 @@ class MolecularDynamics:
         self.kB = 1.0  # Boltzmann constant (arbitrary units)
         self.box_size = np.array([Lx, Ly])
         self.neighbours = [] # Initializing neighbour list
-        self.sigma = 1  # Sigma value for potential
+        self.sigma = 1.0  # Sigma value for potential
         if self.potentialType == "WCA":
             self.cutoff = (2**(1/6))*self.sigma # Potential cutoff
         elif self.potentialType == "LJ":
             self.cutoff = cutoff # Potential cutoff
         self.skin = 0.3 * self.sigma
         self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin)))  # How much to devide the total space for cell neighbours
-        self.epsilon = 1  # Epsilon value for LJ potential
+        self.epsilon = 1.0  # Epsilon value for LJ potential
         print(f"Created md object with settings:")
         print(f"Number of particles: {self.num_particles:d}\nTemperature: {self.temperature:.4f}")
         print(f"Time step: {self.dt:.4f}\nBox size: Lx {Lx:.4f} and Ly {Ly:.4f}")
@@ -58,6 +58,7 @@ class MolecularDynamics:
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
         self.forces = np.zeros((num_particles, 2))
         self.forcesContainer = []
+        self.allforcesContainer = []
         self.distancesContainer = []
         self.potentialEnergy = 0
 
@@ -167,14 +168,17 @@ class MolecularDynamics:
                 distances = self.positions[ii] - self.positions[jj]
                 distances = distances - (np.round(distances/self.box_size)) * self.box_size
                 distance = np.sqrt(np.sum(distances**2))
+                WCAforce = 0
                 if distance < self.cutoff:
                     potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6)) + self.epsilon
                     WCAforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) 
                     self.forces[ii] = self.forces[ii] + ((distances/distance) * WCAforce)
                     self.forces[jj] = self.forces[jj] - ((distances/distance) * WCAforce)
-                    if (ii==0) and (jj==1):
-                        self.forcesContainer.append(WCAforce)
-                        self.distancesContainer.append(distance)
+                if (ii==2) and (jj==5):
+                    self.allforcesContainer.append(WCAforce)
+                if abs(distance - self.cutoff) < 0.01:
+                    self.forcesContainer.append(WCAforce)
+                    self.distancesContainer.append(distance)
 
         self.potentialEnergy = potential_energy
 
@@ -336,7 +340,7 @@ if __name__ == '__main__':
             potential = np.append(potential, md.potentialEnergy)
             kinetic = np.append(kinetic, md.compute_kineticenergy())
         if step % print_freq == 0:    
-            print(f"Step {step}: Kinetic = {kinetic[-1]:.4f}, Total = {potential[-1]+kinetic[-1]:.4f}")
+            print(f"Step {step}: Kinetic = {kinetic[-1]:.4f}, Total = {potential[-1]+kinetic[-1]:.7f}")
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
@@ -367,11 +371,15 @@ if __name__ == '__main__':
     dist = np.linspace(md.sigma*0.9, md.cutoff, 1000)
     added = np.linspace(md.cutoff, md.cutoff*1.1, 1000)
     #forces, distances = reduce_vectors(md.forcesContainer, md.distancesContainer, 1e-06)
+    ax[0].axhline(y=0, color="gray", linestyle="--")
+    ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
+    ax[1].axhline(y=0, color="gray", linestyle="--")
+    ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
     if md.potentialType == "WCA":
-        ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential")
-        ax[0].plot(added, 0*added, color="blue")
-        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="WCA force")
-        ax[1].plot(added, 0*added, color="blue")
+        ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential", color="orchid")
+        ax[0].plot(added, 0*added, color="orchid")
+        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="WCA force", color="orchid")
+        ax[1].plot(added, 0*added, color="orchid")
     elif md.potentialType == "LJ":
         ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
         ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
@@ -379,14 +387,26 @@ if __name__ == '__main__':
         ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
         ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
         ax[1].plot(added, 0*added, color="orange")
-    ax[0].axhline(y=0, color="gray", linestyle="--")
     ax[0].legend()
-    ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
     ax[1].set_ylim(top=100)
-    ax[1].axhline(y=0, color="gray", linestyle="--")
-    ax[1].plot(md.distancesContainer, md.forcesContainer, color="lime", linestyle="--", label="Sampled couple forces")
+    ax[1].scatter(md.distancesContainer, md.forcesContainer, color="lime", s=1, label="All forces")
     ax[1].legend()
-    ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
     plt.tight_layout()
     plt.subplots_adjust(hspace=0)
     plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/potential.png", transparent=False, format="png")
+
+    # Other checks
+    plt.clf()
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.axvline(x=md.cutoff, color="gray", linestyle="--")
+    plt.scatter(md.distancesContainer, md.forcesContainer, color="orchid", s=4, label="Zoomed forces (all pairs)")
+    plt.legend()
+    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/continuous.png", transparent=False, format="png")
+
+    # Other checks
+    plt.clf()
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.plot(md.allforcesContainer, color="orchid", label="Zoomed forces over time (sampled pair)")
+    plt.ylim(top=0.01, bottom=-0.001)
+    plt.legend()
+    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/continuous2.png", transparent=False, format="png")
