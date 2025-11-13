@@ -9,7 +9,8 @@ np.random.seed(0)
 
 class MolecularDynamics:
 
-    def __init__(self, num_particles=100, temperature=0.1, potentialType="WCA", dt=0.001, gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, interaction=True):
+    def __init__(self, num_particles=100, temperature=0.1, potentialType="WCA", dt=0.0001, 
+                 gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, interaction=True):
 
         self.num_particles = num_particles
         self.potentialType = potentialType
@@ -161,26 +162,34 @@ class MolecularDynamics:
         """Forces using WCA potential."""
         
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
-        potential_energy = 0  # Reset potential
+        potential_energy = np.zeros(self.num_particles)  # Reset potential
         for ii in range(self.num_particles):
-            #for jj in self.neighbours[ii]:
-            for jj in range(ii + 1, self.num_particles):
+            for jj in self.neighbours[ii]:
+            #for jj in range(ii + 1, self.num_particles):
                 distances = self.positions[ii] - self.positions[jj]
-                distances = distances - (np.round(distances/self.box_size)) * self.box_size
-                distance = np.sqrt(np.sum(distances**2))
+                distances -= np.round(distances/self.box_size) * self.box_size
+                #distance = np.sqrt(np.sum(distances**2))
+                distance = np.linalg.norm(distances)
                 WCAforce = 0
+                ratio6 = (self.sigma / distance)**6
+                ratio12 = ratio6 * ratio6
                 if distance < self.cutoff:
-                    potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6)) + self.epsilon
-                    WCAforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) 
-                    self.forces[ii] = self.forces[ii] + ((distances/distance) * WCAforce)
-                    self.forces[jj] = self.forces[jj] - ((distances/distance) * WCAforce)
+                    # 0.5 for distributing the energy in the two particles
+                    potential_energy[ii] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
+                    potential_energy[jj] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
+                    #potential_energy[ii] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
+                    #potential_energy[jj] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
+                    #WCAforce = (4 * self.epsilon / distance) * (12 * (self.sigma/distance)**12 - 6 * (self.sigma/distance)**6)
+                    WCAforce = 24 * self.epsilon * (2 * ratio12 - ratio6) / distance 
+                    self.forces[ii] += WCAforce * distances / distance
+                    self.forces[jj] -= WCAforce * distances / distance
                 if (ii==2) and (jj==5):
                     self.allforcesContainer.append(WCAforce)
                 if abs(distance - self.cutoff) < 0.01:
                     self.forcesContainer.append(WCAforce)
                     self.distancesContainer.append(distance)
 
-        self.potentialEnergy = potential_energy
+        self.potentialEnergy = np.sum(potential_energy)
 
     def langevin_force(self):
         """Compute stochastic white noise and friction forces."""
@@ -322,7 +331,7 @@ if __name__ == '__main__':
     msd = np.empty(0)
     potential = np.empty(0)
     kinetic = np.empty(0)
-    all_positions = np.zeros((md.initial_positions.shape[0], md.initial_positions.shape[1], num_steps + save_freq))
+    #all_positions = np.zeros((md.initial_positions.shape[0], md.initial_positions.shape[1], num_steps + save_freq))
     # Run integration, store and print data at given frequency
     for step in range(num_steps + save_freq):
         if step % neighbour_update == 0:
@@ -330,17 +339,17 @@ if __name__ == '__main__':
             #md.compute_cell_neighbours()
         if integrator == 'nve':
             md.velocity_verlet_nve()
-            all_positions[:, :, step] = md.positions
+            #all_positions[:, :, step] = md.positions
         elif integrator == 'langevin':
             md.velocity_verlet_langevin()
-            all_positions[:, :, step] = md.positions
+            #all_positions[:, :, step] = md.positions
         if step % save_freq == 0:
             temp = np.append(temp, md.compute_temperature())
             msd = np.append(msd, md.compute_msd())
             potential = np.append(potential, md.potentialEnergy)
             kinetic = np.append(kinetic, md.compute_kineticenergy())
-        if step % print_freq == 0:    
-            print(f"Step {step}: Kinetic = {kinetic[-1]:.4f}, Total = {potential[-1]+kinetic[-1]:.7f}")
+        if step % print_freq == 0:
+            print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
@@ -348,7 +357,7 @@ if __name__ == '__main__':
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
-    np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((time, temp, potential+kinetic)))
+    np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((time, temp, potential, kinetic)))
 
     # Plot energy versus time
     fig, ax = plt.subplots(3, 1, figsize = (7, 7), sharex = True, dpi = 120)
@@ -364,7 +373,7 @@ if __name__ == '__main__':
     ax[2].set_xlabel("$Simulation$ $time,$ $t$", fontsize=16)
     plt.tight_layout()
     plt.subplots_adjust(hspace=0)
-    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/energies.png", transparent=False, format="png")
+    plt.savefig(directory + "/energies.png", transparent=False, format="png")
 
     # Plotting the potential, force and cutoff
     fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
@@ -393,7 +402,7 @@ if __name__ == '__main__':
     ax[1].legend()
     plt.tight_layout()
     plt.subplots_adjust(hspace=0)
-    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/potential.png", transparent=False, format="png")
+    plt.savefig(directory + "/potential.png", transparent=False, format="png")
 
     # Other checks
     plt.clf()
@@ -401,7 +410,7 @@ if __name__ == '__main__':
     plt.axvline(x=md.cutoff, color="gray", linestyle="--")
     plt.scatter(md.distancesContainer, md.forcesContainer, color="orchid", s=4, label="Zoomed forces (all pairs)")
     plt.legend()
-    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/continuous.png", transparent=False, format="png")
+    plt.savefig(directory + "/continuous.png", transparent=False, format="png")
 
     # Other checks
     plt.clf()
@@ -409,4 +418,4 @@ if __name__ == '__main__':
     plt.plot(md.allforcesContainer, color="orchid", label="Zoomed forces over time (sampled pair)")
     plt.ylim(top=0.01, bottom=-0.001)
     plt.legend()
-    plt.savefig("/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test/continuous2.png", transparent=False, format="png")
+    plt.savefig(directory + "/continuous2.png", transparent=False, format="png")
