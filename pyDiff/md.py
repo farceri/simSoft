@@ -5,12 +5,12 @@ from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 import time
 np.random.seed(0)
-#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 15 1 10000
+#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 60 1 10000
 
 class MolecularDynamics:
 
     def __init__(self, num_particles=100, temperature=0.1, potentialType="WCA", dt=0.0001, 
-                 gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, interaction=True):
+                 gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, initialConf=False, figures=False, interaction=True):
 
         self.num_particles = num_particles
         self.potentialType = potentialType
@@ -33,35 +33,45 @@ class MolecularDynamics:
         print(f"Number of particles: {self.num_particles:d}\nTemperature: {self.temperature:.4f}")
         print(f"Time step: {self.dt:.4f}\nBox size: Lx {Lx:.4f} and Ly {Ly:.4f}")
         print(f"Potential type: {self.potentialType}")
+        data = np.loadtxt(directory + os.sep + 'md_conf.dat')
         
-        # Initialize positions in a grid 
-        nSide = int(np.ceil(np.sqrt(self.num_particles)))
-        # Create grid positions
-        x = (np.arange(nSide) + 0.5) * (self.box_size[0]/nSide) - (self.box_size[0]/nSide)/2
-        y = (np.arange(nSide) + 0.5) * (self.box_size[1]/nSide) - (self.box_size[1]/nSide)/2
-        xv, yv = np.meshgrid(x, y)
-        positions = np.vstack([xv.ravel(), yv.ravel()]).T
-        positions = positions - (self.box_size[0]/2)*np.ones_like(positions)
-        positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
-        self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
-        self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
+        if initialConf:
+            # Take the existing saved configuration
+            data = np.loadtxt(directory + os.sep + 'md_conf.dat')
+            self.positions = data[:, :2]
+            self.velocities = data[:, 2:]
+        else:
+            # Initialize positions in a grid 
+            nSide = int(np.ceil(np.sqrt(self.num_particles)))
+            # Create grid positions
+            x = (np.arange(nSide) + 0.5) * (self.box_size[0]/nSide) - (self.box_size[0]/nSide)/2
+            y = (np.arange(nSide) + 0.5) * (self.box_size[1]/nSide) - (self.box_size[1]/nSide)/2
+            xv, yv = np.meshgrid(x, y)
+            positions = np.vstack([xv.ravel(), yv.ravel()]).T
+            positions = positions - (self.box_size[0]/2)*np.ones_like(positions)
+            positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
+            self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
 
-        # Initialize velocities
-        self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
-        #self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-        """# Re-sample outliers
-        vMax = self.cutoff/3
-        outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
-        while outliers.any():
-            self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
-            self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
-        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
+            # Initialize velocities
+            self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
+            #self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+            """# Re-sample outliers
+            vMax = self.cutoff/3
+            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
+            while outliers.any():
+                self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
+                self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+                outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
+            self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
+        
+        self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
+        self.neighbours_positions = np.copy(self.positions) # Store the last needed configuration for the neighbours update
         self.forces = np.zeros((num_particles, 2))
         self.forcesContainer = []
         self.allforcesContainer = []
         self.distancesContainer = []
         self.potentialEnergy = 0
+        self.figures = figures
 
         # Set size for interacting particles - no force is implemented yet
         self.interaction = interaction
@@ -117,6 +127,8 @@ class MolecularDynamics:
                     other_head = list[other_head] # next head in line
                     
             self.neighbours.append(ii_list.copy())
+        
+        self.neighbours_positions = self.positions
 
     def compute_disk_neighbours(self):
         """"Computing nearest neighbours based on simple disk distance."""
@@ -134,6 +146,8 @@ class MolecularDynamics:
                 
                 self.neighbours.append(ii_list.copy())
 
+        self.neighbours_positions = self.positions
+
     def compute_LJ_forces(self):
         """Shifted forces using LJ potential."""
         
@@ -143,8 +157,8 @@ class MolecularDynamics:
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
         potential_energy = 0  # Reset potential
         for ii in range(self.num_particles):
-            #for jj in self.neighbours[ii]:
-            for jj in range(ii + 1, self.num_particles):
+            for jj in self.neighbours[ii]:
+            #for jj in range(ii + 1, self.num_particles):
                 distances = self.positions[ii] - self.positions[jj]
                 distances = distances - (np.round(distances/self.box_size)) * self.box_size
                 distance = np.sqrt(np.sum(distances**2))
@@ -168,7 +182,6 @@ class MolecularDynamics:
             #for jj in range(ii + 1, self.num_particles):
                 distances = self.positions[ii] - self.positions[jj]
                 distances -= np.round(distances/self.box_size) * self.box_size
-                #distance = np.sqrt(np.sum(distances**2))
                 distance = np.linalg.norm(distances)
                 WCAforce = 0
                 ratio6 = (self.sigma / distance)**6
@@ -311,6 +324,7 @@ def reduce_vectors(vector1, vector2, eps):
     return reduced_v1, reduced_v2
 
 if __name__ == '__main__':
+
     start = time.time()
     # Read input parameters
     directory = sys.argv[1] # Directory for input and output
@@ -321,7 +335,7 @@ if __name__ == '__main__':
     num_steps = int(float(sys.argv[6])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    neighbour_update = 5
+    positions_save_freq = int(num_steps/100)
     
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature, potentialType)
@@ -331,33 +345,43 @@ if __name__ == '__main__':
     msd = np.empty(0)
     potential = np.empty(0)
     kinetic = np.empty(0)
-    #all_positions = np.zeros((md.initial_positions.shape[0], md.initial_positions.shape[1], num_steps + save_freq))
+    all_positions = []
+    md.compute_disk_neighbours()
+    #md.compute_cell_neighbours()
+
     # Run integration, store and print data at given frequency
     for step in range(num_steps + save_freq):
-        if step % neighbour_update == 0:
-            md.compute_disk_neighbours()
+        distances = md.positions - md.neighbours_positions
+        distances -= np.round(distances/md.box_size) * md.box_size
+        distance = np.linalg.norm(distances, axis=1)
+        if np.any(distances >= md.skin/2): # Update the neighbour list only when necessary
+            md.compute_disk_neighbours() 
             #md.compute_cell_neighbours()
         if integrator == 'nve':
             md.velocity_verlet_nve()
-            #all_positions[:, :, step] = md.positions
         elif integrator == 'langevin':
             md.velocity_verlet_langevin()
-            #all_positions[:, :, step] = md.positions
         if step % save_freq == 0:
             temp = np.append(temp, md.compute_temperature())
             msd = np.append(msd, md.compute_msd())
             potential = np.append(potential, md.potentialEnergy)
             kinetic = np.append(kinetic, md.compute_kineticenergy())
+        if step % positions_save_freq == 0:
+            all_positions.append(md.positions.copy())
         if step % print_freq == 0:
             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    # part_evolution(num_particles, all_positions, md, 1, 50)
+    all_positions = np.array(all_positions)
+    all_positions = np.stack(all_positions, axis=-1)
+    # part_evolution(num_particles, all_positions, md, 1, 1)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
     np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((time, temp, potential, kinetic)))
+    # Store also the last positions and velocities of the particles
+    np.savetxt(directory + os.sep + 'md_conf.dat', np.column_stack((md.positions[:, 0], md.positions[:, 1], md.velocities[:, 0], md.velocities[:, 1])))
 
     # Plot energy versus time
     fig, ax = plt.subplots(3, 1, figsize = (7, 7), sharex = True, dpi = 120)
@@ -375,47 +399,48 @@ if __name__ == '__main__':
     plt.subplots_adjust(hspace=0)
     plt.savefig(directory + "/energies.png", transparent=False, format="png")
 
-    # Plotting the potential, force and cutoff
-    fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
-    dist = np.linspace(md.sigma*0.9, md.cutoff, 1000)
-    added = np.linspace(md.cutoff, md.cutoff*1.1, 1000)
-    #forces, distances = reduce_vectors(md.forcesContainer, md.distancesContainer, 1e-06)
-    ax[0].axhline(y=0, color="gray", linestyle="--")
-    ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
-    ax[1].axhline(y=0, color="gray", linestyle="--")
-    ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
-    if md.potentialType == "WCA":
-        ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential", color="orchid")
-        ax[0].plot(added, 0*added, color="orchid")
-        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="WCA force", color="orchid")
-        ax[1].plot(added, 0*added, color="orchid")
-    elif md.potentialType == "LJ":
-        ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
-        ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
-        ax[0].plot(added, 0*added, color="orange")
-        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
-        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
-        ax[1].plot(added, 0*added, color="orange")
-    ax[0].legend()
-    ax[1].set_ylim(top=100)
-    ax[1].scatter(md.distancesContainer, md.forcesContainer, color="lime", s=1, label="All forces")
-    ax[1].legend()
-    plt.tight_layout()
-    plt.subplots_adjust(hspace=0)
-    plt.savefig(directory + "/potential.png", transparent=False, format="png")
+    if md.figures:
+        # Plotting the potential, force and cutoff
+        fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
+        dist = np.linspace(md.sigma*0.9, md.cutoff, 1000)
+        added = np.linspace(md.cutoff, md.cutoff*1.1, 1000)
+        #forces, distances = reduce_vectors(md.forcesContainer, md.distancesContainer, 1e-06)
+        ax[0].axhline(y=0, color="gray", linestyle="--")
+        ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
+        ax[1].axhline(y=0, color="gray", linestyle="--")
+        ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
+        if md.potentialType == "WCA":
+            ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential", color="orchid")
+            ax[0].plot(added, 0*added, color="orchid")
+            ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="WCA force", color="orchid")
+            ax[1].plot(added, 0*added, color="orchid")
+        elif md.potentialType == "LJ":
+            ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
+            ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
+            ax[0].plot(added, 0*added, color="orange")
+            ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
+            ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
+            ax[1].plot(added, 0*added, color="orange")
+        ax[0].legend()
+        ax[1].set_ylim(top=100)
+        ax[1].scatter(md.distancesContainer, md.forcesContainer, color="lime", s=1, label="All forces")
+        ax[1].legend()
+        plt.tight_layout()
+        plt.subplots_adjust(hspace=0)
+        plt.savefig(directory + "/potential.png", transparent=False, format="png")
 
-    # Other checks
-    plt.clf()
-    plt.axhline(y=0, color="gray", linestyle="--")
-    plt.axvline(x=md.cutoff, color="gray", linestyle="--")
-    plt.scatter(md.distancesContainer, md.forcesContainer, color="orchid", s=4, label="Zoomed forces (all pairs)")
-    plt.legend()
-    plt.savefig(directory + "/continuous.png", transparent=False, format="png")
+        # Other checks
+        plt.clf()
+        plt.axhline(y=0, color="gray", linestyle="--")
+        plt.axvline(x=md.cutoff, color="gray", linestyle="--")
+        plt.scatter(md.distancesContainer, md.forcesContainer, color="orchid", s=4, label="Zoomed forces (all pairs)")
+        plt.legend()
+        plt.savefig(directory + "/continuous.png", transparent=False, format="png")
 
-    # Other checks
-    plt.clf()
-    plt.axhline(y=0, color="gray", linestyle="--")
-    plt.plot(md.allforcesContainer, color="orchid", label="Zoomed forces over time (sampled pair)")
-    plt.ylim(top=0.01, bottom=-0.001)
-    plt.legend()
-    plt.savefig(directory + "/continuous2.png", transparent=False, format="png")
+        # Other checks
+        plt.clf()
+        plt.axhline(y=0, color="gray", linestyle="--")
+        plt.plot(md.allforcesContainer, color="orchid", label="Zoomed forces over time (sampled pair)")
+        plt.ylim(top=0.01, bottom=-0.001)
+        plt.legend()
+        plt.savefig(directory + "/continuous2.png", transparent=False, format="png")
