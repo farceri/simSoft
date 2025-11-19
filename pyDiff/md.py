@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 import time
 np.random.seed(0)
-#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 60 1 10000
+#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 30 1 100000
 
 class MolecularDynamics:
 
@@ -72,6 +72,7 @@ class MolecularDynamics:
         self.distancesContainer = []
         self.potentialEnergy = 0
         self.figures = figures
+        self.unwrapped_positions = np.copy(self.positions)
 
         # Set size for interacting particles - no force is implemented yet
         self.interaction = interaction
@@ -213,6 +214,7 @@ class MolecularDynamics:
         """Velocity Verlet integration for NVE dynamics."""
         self.velocities += 0.5 * self.forces / self.mass * self.dt
         self.positions += self.velocities * self.dt
+        self.unwrapped_positions += self.velocities * self.dt
         self.apply_pbc()
         if self.interaction:
             if self.potentialType == "WCA":
@@ -225,6 +227,7 @@ class MolecularDynamics:
         """Velocity Verlet integration for Langevin dynamics."""
         self.velocities += 0.5 * self.forces / self.mass * self.dt
         self.positions += self.velocities * self.dt
+        self.unwrapped_positions += self.positions
         self.apply_pbc()
         if self.interaction:
             if self.potentialType == "WCA":
@@ -244,7 +247,7 @@ class MolecularDynamics:
 
     def compute_msd(self):
         """Compute the mean squared displacement."""
-        displacement = self.positions - self.initial_positions
+        displacement = self.unwrapped_positions - self.initial_positions
         msd = np.mean(np.sum(displacement ** 2, axis=1))
         return msd
 
@@ -384,20 +387,29 @@ if __name__ == '__main__':
     np.savetxt(directory + os.sep + 'md_conf.dat', np.column_stack((md.positions[:, 0], md.positions[:, 1], md.velocities[:, 0], md.velocities[:, 1])))
 
     # Plot energy versus time
-    fig, ax = plt.subplots(3, 1, figsize = (7, 7), sharex = True, dpi = 120)
-    ax[0].plot(time, kinetic, color='k', linestyle='solid', marker='o', markersize='4', fillstyle='none')
-    ax[0].tick_params(axis='both', labelsize=14)
-    ax[0].set_ylabel("$Kinetic energy,$ $K$", fontsize=16)
-    ax[1].plot(time, potential, color='k', linewidth=0.9, linestyle='solid', marker='o', markersize='6', fillstyle='none')
-    ax[1].tick_params(axis='both', labelsize=14)
-    ax[1].set_ylabel("$Potential Energy,$ $U$", fontsize=16)
-    ax[2].plot(time, potential+kinetic, color='k', linewidth=0.9, linestyle='solid', marker='o', markersize='6', fillstyle='none')
-    ax[2].tick_params(axis='both', labelsize=14)
-    ax[2].set_ylabel("$Total Energy,$ $E_{tot}$", fontsize=16)
-    ax[2].set_xlabel("$Simulation$ $time,$ $t$", fontsize=16)
+    plt.title(r"Energies for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
+    plt.plot(time, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.plot(time, potential, color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.plot(time, potential+kinetic, color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.ylabel("Energies", fontsize=14)
+    plt.xlabel(r"Simulation time, $t$", fontsize=14)
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0)
+    plt.legend()
     plt.savefig(directory + "/energies.png", transparent=False, format="png")
+
+    # Plot mean squared displacement
+    plt.clf()
+    plt.title(r"MSD for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
+    plt.plot(time, msd, color='steelblue', linestyle='solid', marker='o', markersize='3', fillstyle='none', label="MSD over simulation time")
+    plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
+    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.ylim(bottom=0)
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(directory + "/msd.png", transparent=False, format="png")
 
     if md.figures:
         # Plotting the potential, force and cutoff
