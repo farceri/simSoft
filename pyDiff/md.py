@@ -10,7 +10,7 @@ np.random.seed(0)
 class MolecularDynamics:
 
     def __init__(self, num_particles=100, temperature=0.1, potentialType="WCA", dt=0.0001, 
-                 gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, initialConf=False, figures=False, interaction=True):
+                 gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, initialConf=False, figures=False, interaction=False):
 
         self.num_particles = num_particles
         self.potentialType = potentialType
@@ -73,6 +73,11 @@ class MolecularDynamics:
         self.potentialEnergy = 0
         self.figures = figures
         self.unwrapped_positions = np.copy(self.positions)
+        self.all_positions = []
+        self.positions_save_freq = 1000
+
+        self.kx=0
+        self.ky=0
 
         # Set size for interacting particles - no force is implemented yet
         self.interaction = interaction
@@ -246,10 +251,22 @@ class MolecularDynamics:
         return (0.5 * self.mass * np.sum(self.velocities ** 2))
 
     def compute_msd(self):
-        """Compute the mean squared displacement."""
+        """Compute the Mean Squared Displacement."""
         displacement = self.unwrapped_positions - self.initial_positions
         msd = np.mean(np.sum(displacement ** 2, axis=1))
         return msd
+
+    def compute_isf(self):
+        "Compute the Intermediate Scattering Function for different k values."
+        self.kx = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], (2*np.pi)/self.box_size[0])
+        self.ky = self.kx*0
+        k_vec = np.array((self.kx, self.ky))
+        isf = np.zeros((np.shape(self.kx)), dtype=complex)
+        #mask = ~np.eye(self.num_particles, dtype=bool)
+        for ii in range(int(np.shape(self.kx)[0])):
+            isf[ii] = np.sum(np.exp(1j * np.matmul((self.unwrapped_positions - self.initial_positions), k_vec[:, ii])))/self.num_particles
+            isf[ii] += np.sum(np.exp(1j * np.matmul((self.unwrapped_positions[:, None, :] - self.initial_positions[None, :, :]), k_vec[:, ii])))/(self.num_particles*(self.num_particles-1))
+        return isf
 
 def part_evolution(num_particles, positions, md, points, step):
     """Animation of the particles."""
@@ -338,17 +355,17 @@ if __name__ == '__main__':
     num_steps = int(float(sys.argv[6])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    positions_save_freq = int(num_steps/100)
     
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature, potentialType)
+    md.positions_save_freq = int(num_steps/100)
 
     # Create arrays for storing energy and msd
     temp = np.empty(0)
     msd = np.empty(0)
+    isf = np.empty((0, int(np.shape(md.compute_isf())[0])))
     potential = np.empty(0)
     kinetic = np.empty(0)
-    all_positions = []
     md.compute_disk_neighbours()
     #md.compute_cell_neighbours()
 
@@ -357,7 +374,7 @@ if __name__ == '__main__':
         distances = md.positions - md.neighbours_positions
         distances -= np.round(distances/md.box_size) * md.box_size
         distance = np.linalg.norm(distances, axis=1)
-        if np.any(distances >= md.skin/2): # Update the neighbour list only when necessary
+        if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
             md.compute_disk_neighbours() 
             #md.compute_cell_neighbours()
         if integrator == 'nve':
@@ -367,18 +384,19 @@ if __name__ == '__main__':
         if step % save_freq == 0:
             temp = np.append(temp, md.compute_temperature())
             msd = np.append(msd, md.compute_msd())
+            isf = np.concatenate((isf, md.compute_isf()[None, :]), axis=0)
             potential = np.append(potential, md.potentialEnergy)
             kinetic = np.append(kinetic, md.compute_kineticenergy())
-        if step % positions_save_freq == 0:
-            all_positions.append(md.positions.copy())
+        if step % md.positions_save_freq == 0:
+            md.all_positions.append(md.unwrapped_positions.copy())
         if step % print_freq == 0:
             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
-    all_positions = np.array(all_positions)
-    all_positions = np.stack(all_positions, axis=-1)
-    # part_evolution(num_particles, all_positions, md, 1, 1)
+    md.all_positions = np.array(md.all_positions)
+    md.all_positions = np.stack(md.all_positions, axis=-1)
+    #part_evolution(num_particles, md.all_positions, md, 1, 1)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
@@ -387,6 +405,7 @@ if __name__ == '__main__':
     np.savetxt(directory + os.sep + 'md_conf.dat', np.column_stack((md.positions[:, 0], md.positions[:, 1], md.velocities[:, 0], md.velocities[:, 1])))
 
     # Plot energy versus time
+    plt.clf()
     plt.title(r"Energies for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
     plt.plot(time, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
     plt.tick_params(axis='both', labelsize=14)
@@ -410,6 +429,21 @@ if __name__ == '__main__':
     plt.tight_layout()
     plt.legend()
     plt.savefig(directory + "/msd.png", transparent=False, format="png")
+
+    # Plot intermediate scattering function
+    plt.clf()
+    plt.title(r"ISF for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
+    cmap = plt.get_cmap("viridis")  
+    n_colors = int(np.shape(isf)[1])
+    colors = [cmap(ii / (n_colors - 1)) for ii in range(n_colors)]
+    for ii, kx in enumerate(md.kx):
+        plt.plot(time, isf[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='3', fillstyle='none', label=r"$|k|=%.1f$" %(kx))
+    plt.ylabel(r"ISF", fontsize=14)
+    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.ylim(bottom=0)
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(directory + "/isf.png", transparent=False, format="png")
 
     if md.figures:
         # Plotting the potential, force and cutoff
