@@ -63,7 +63,7 @@ class MolecularDynamics:
                 self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
                 outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
             self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
-        
+            
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
         self.neighbours_positions = np.copy(self.positions) # Store the last needed configuration for the neighbours update
         self.forces = np.zeros((num_particles, 2))
@@ -74,6 +74,7 @@ class MolecularDynamics:
         self.figures = figures
         self.unwrapped_positions = np.copy(self.positions)
         self.all_positions = []
+        self.all_unwrapped_positions = []
         self.positions_save_freq = 1000
 
         self.kx=0
@@ -257,16 +258,25 @@ class MolecularDynamics:
         return msd
 
     def compute_isf(self):
-        "Compute the Intermediate Scattering Function for different k values."
+        "Compute the Intermediate Scattering Function for different k values with mean over different t0."
+
         self.kx = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], (2*np.pi)/self.box_size[0])
         self.ky = self.kx*0
         k_vec = np.array((self.kx, self.ky))
-        isf = np.zeros((np.shape(self.kx)), dtype=complex)
+        isf = np.zeros((np.shape(self.kx)[0]), dtype=complex)
         #mask = ~np.eye(self.num_particles, dtype=bool)
-        for ii in range(int(np.shape(self.kx)[0])):
-            isf[ii] = np.sum(np.exp(1j * np.matmul((self.unwrapped_positions - self.initial_positions), k_vec[:, ii])))/self.num_particles
-            isf[ii] += np.sum(np.exp(1j * np.matmul((self.unwrapped_positions[:, None, :] - self.initial_positions[None, :, :]), k_vec[:, ii])))/(self.num_particles*(self.num_particles-1))
-        return isf
+        saves = np.shape(md.all_unwrapped_positions)[0]
+        isf_total = np.zeros((saves, (np.shape(self.kx)[0])), dtype=complex)
+
+        for t0 in range(saves):
+            temporary_ip = self.all_unwrapped_positions[t0]
+            for t in range(t0, saves):
+                for ii in range(int(np.shape(self.kx)[0])):
+                    isf[ii] = np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), k_vec[:, ii])))/self.num_particles
+                    isf[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), k_vec[:, ii])))/(self.num_particles*(self.num_particles-1))
+                isf_total[t-t0, :] += isf / (saves - (t-t0))
+
+        return isf_total
 
 def part_evolution(num_particles, positions, md, points, step):
     """Animation of the particles."""
@@ -363,7 +373,6 @@ if __name__ == '__main__':
     # Create arrays for storing energy and msd
     temp = np.empty(0)
     msd = np.empty(0)
-    isf = np.empty((0, int(np.shape(md.compute_isf())[0])))
     potential = np.empty(0)
     kinetic = np.empty(0)
     md.compute_disk_neighbours()
@@ -384,13 +393,14 @@ if __name__ == '__main__':
         if step % save_freq == 0:
             temp = np.append(temp, md.compute_temperature())
             msd = np.append(msd, md.compute_msd())
-            isf = np.concatenate((isf, md.compute_isf()[None, :]), axis=0)
             potential = np.append(potential, md.potentialEnergy)
             kinetic = np.append(kinetic, md.compute_kineticenergy())
         if step % md.positions_save_freq == 0:
-            md.all_positions.append(md.unwrapped_positions.copy())
+            md.all_positions.append(md.positions.copy())
+            md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
         if step % print_freq == 0:
             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
+    isf = md.compute_isf()
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
