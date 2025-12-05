@@ -257,26 +257,28 @@ class MolecularDynamics:
         msd = np.mean(np.sum(displacement ** 2, axis=1))
         return msd
 
-    def compute_isf(self):
+    def compute_isf(self, inf_lim, sup_lim):
         "Compute the Intermediate Scattering Function for different k values with mean over different t0."
 
-        self.kx = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], (2*np.pi)/self.box_size[0])
+        self.kx = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0])
         self.ky = self.kx*0
         k_vec = np.array((self.kx, self.ky))
-        isf = np.zeros((np.shape(self.kx)[0]), dtype=complex)
+        isf_self = np.zeros((np.shape(self.kx)[0]), dtype=complex)
+        isf_int = np.zeros((np.shape(self.kx)[0]), dtype=complex)
         #mask = ~np.eye(self.num_particles, dtype=bool)
-        saves = np.shape(md.all_unwrapped_positions)[0]
-        isf_total = np.zeros((saves, (np.shape(self.kx)[0])), dtype=complex)
+        isf_total_self = np.zeros((sup_lim, (np.shape(self.kx)[0])), dtype=complex)
+        isf_total_int = np.zeros((sup_lim, (np.shape(self.kx)[0])), dtype=complex)
 
-        for t0 in range(saves):
+        for t0 in range(sup_lim):
             temporary_ip = self.all_unwrapped_positions[t0]
-            for t in range(t0, saves):
+            for t in range(t0, sup_lim):
                 for ii in range(int(np.shape(self.kx)[0])):
-                    isf[ii] = np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), k_vec[:, ii])))/self.num_particles
-                    isf[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), k_vec[:, ii])))/(self.num_particles*(self.num_particles-1))
-                isf_total[t-t0, :] += isf / (saves - (t-t0))
+                    isf_self[ii] = np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), k_vec[:, ii])))/self.num_particles
+                    isf_int[ii] = np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), k_vec[:, ii])))/(self.num_particles*(self.num_particles-1))
+                isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
+                isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
 
-        return isf_total
+        return isf_total_self, isf_total_int
 
 def part_evolution(num_particles, positions, md, points, step):
     """Animation of the particles."""
@@ -400,7 +402,7 @@ if __name__ == '__main__':
             md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
         if step % print_freq == 0:
             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
-    isf = md.compute_isf()
+    isf_self, isf_int = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
@@ -444,10 +446,13 @@ if __name__ == '__main__':
     plt.clf()
     plt.title(r"ISF for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
     cmap = plt.get_cmap("viridis")  
-    n_colors = int(np.shape(isf)[1])
+    n_colors = int(np.shape(isf_self)[1])
     colors = [cmap(ii / (n_colors - 1)) for ii in range(n_colors)]
     for ii, kx in enumerate(md.kx):
-        plt.plot(time, isf[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='3', fillstyle='none', label=r"$|k|=%.1f$" %(kx))
+        #plt.plot(time, isf_self[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='*', markersize='4', fillstyle='none')
+        #plt.plot(time, isf_int[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='x', markersize='4', fillstyle='none')
+        plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$, total" %(kx))
+
     plt.ylabel(r"ISF", fontsize=14)
     plt.xlabel(r"Simulation time, $t$", fontsize=14)
     plt.ylim(bottom=0)
