@@ -3,9 +3,19 @@ import sys
 import os
 from matplotlib import pyplot as plt
 import matplotlib.animation as animation
+from scipy.optimize import curve_fit
 import time
 np.random.seed(0)
 #python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 30 1 100000
+
+def fitFunc(x, a, b, c):
+    return a * (x**b) + c
+
+def fitFunc_lin(x, a, b):
+    return a * x + b
+
+def fitFunc_exp(x, a, b, c):
+    return a * np.exp(-b * x) + c
 
 class MolecularDynamics:
 
@@ -63,7 +73,7 @@ class MolecularDynamics:
                 self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
                 outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
             self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
-            
+        
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
         self.neighbours_positions = np.copy(self.positions) # Store the last needed configuration for the neighbours update
         self.forces = np.zeros((num_particles, 2))
@@ -77,8 +87,9 @@ class MolecularDynamics:
         self.all_unwrapped_positions = []
         self.positions_save_freq = 1000
 
-        self.kx=0
-        self.ky=0
+        self.k_mods = 0
+        self.kx = 0
+        self.ky = 0
 
         # Set size for interacting particles - no force is implemented yet
         self.interaction = interaction
@@ -233,13 +244,14 @@ class MolecularDynamics:
         """Velocity Verlet integration for Langevin dynamics."""
         self.velocities += 0.5 * self.forces / self.mass * self.dt
         self.positions += self.velocities * self.dt
-        self.unwrapped_positions += self.positions
+        self.unwrapped_positions += self.velocities * self.dt
         self.apply_pbc()
         if self.interaction:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()
+        else : self.forces = np.zeros((num_particles, 2))
         self.forces += self.langevin_force()
         self.velocities += 0.5 * self.forces / self.mass * self.dt
 
@@ -260,16 +272,18 @@ class MolecularDynamics:
     def compute_isf(self, inf_lim, sup_lim):
         "Compute the Intermediate Scattering Function for different k values with mean over different t0."
 
-        self.kx = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0])
-        self.ky = self.kx*0
-        k_vec = np.array((self.kx, self.ky))
-        isf_self = np.zeros((np.shape(self.kx)[0]), dtype=complex)
-        isf_int = np.zeros((np.shape(self.kx)[0]), dtype=complex)
+        #self.k_mods = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0])
+        self.k_mods = np.array(((2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0], (2*np.pi)))
+        isf_self = np.zeros((np.shape(self.k_mods)[0]), dtype=complex)
+        isf_int = np.zeros((np.shape(self.k_mods)[0]), dtype=complex)
         #mask = ~np.eye(self.num_particles, dtype=bool)
-        isf_total_self = np.zeros((sup_lim, (np.shape(self.kx)[0])), dtype=complex)
-        isf_total_int = np.zeros((sup_lim, (np.shape(self.kx)[0])), dtype=complex)
+        isf_total_self = np.zeros((sup_lim, (np.shape(self.k_mods)[0])), dtype=complex)
+        isf_total_int = np.zeros((sup_lim, (np.shape(self.k_mods)[0])), dtype=complex)
 
-        for t0 in range(sup_lim):
+        self.kx = self.k_mods
+        self.ky = self.kx * 0
+        k_vec = np.array((self.kx, self.ky))
+        for t0 in range(inf_lim, sup_lim):
             temporary_ip = self.all_unwrapped_positions[t0]
             for t in range(t0, sup_lim):
                 for ii in range(int(np.shape(self.kx)[0])):
@@ -278,6 +292,24 @@ class MolecularDynamics:
                 isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
                 isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
 
+        # Temporary add
+        """numDirs = 10
+        angles = np.linspace(0, 2*np.pi, numDirs, endpoint=False)
+        for t0 in range(inf_lim, sup_lim):
+            temporary_ip = self.all_unwrapped_positions[t0]
+            for t in range(t0, sup_lim):
+                isf_self *= 0
+                isf_int *= 0
+                for ii, kMod in enumerate(self.k_mods):
+                    self.kx = kMod * np.cos(angles)
+                    self.ky = kMod * np.sin(angles)
+                    k_vecs = np.stack([self.kx, self.ky], axis=1)
+                    for k_vec in k_vecs:
+                        isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), k_vec)))/(self.num_particles*numDirs)
+                        isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), k_vec)))/(self.num_particles*(self.num_particles-1)*numDirs)
+                isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
+                isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))"""
+                
         return isf_total_self, isf_total_int
 
 def part_evolution(num_particles, positions, md, points, step):
@@ -418,7 +450,7 @@ if __name__ == '__main__':
 
     # Plot energy versus time
     plt.clf()
-    plt.title(r"Energies for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
+    plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
     plt.plot(time, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
     plt.tick_params(axis='both', labelsize=14)
     plt.plot(time, potential, color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
@@ -433,8 +465,14 @@ if __name__ == '__main__':
 
     # Plot mean squared displacement
     plt.clf()
-    plt.title(r"MSD for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
+    eq = md.gamma*md.dt*save_freq
+    plt.title(r"MSD for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
     plt.plot(time, msd, color='steelblue', linestyle='solid', marker='o', markersize='3', fillstyle='none', label="MSD over simulation time")
+    #popt, pcov = curve_fit(fitFunc, time[:int(1/eq)], msd[:int(1/eq)])
+    #plt.plot(time[:int(1/eq)], popt[0] * (time[:int(1/eq)]**popt[1]) + popt[2], color="black", linestyle="dotted", label=r"Fit: $\propto t^{%.1f}$" %(popt[1]))
+    #popt, pcov = curve_fit(fitFunc_lin, time[int(6/eq):], msd[int(6/eq):])
+    #plt.plot(time[int(6/eq):], popt[0] * (time[int(6/eq):]) + popt[1], color="orchid", linestyle="dotted", label=r"Fit: %.1f$\cdot$t" %(popt[0]))
+    #print("The thing should be: ", 4*(md.temperature/md.gamma))
     plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
     plt.xlabel(r"Simulation time, $t$", fontsize=14)
     plt.ylim(bottom=0)
@@ -444,17 +482,18 @@ if __name__ == '__main__':
 
     # Plot intermediate scattering function
     plt.clf()
-    plt.title(r"ISF for: N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff), fontsize=16)
+    plt.title(r"ISF for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
     cmap = plt.get_cmap("viridis")  
     n_colors = int(np.shape(isf_self)[1])
     colors = [cmap(ii / (n_colors - 1)) for ii in range(n_colors)]
-    for ii, kx in enumerate(md.kx):
-        #plt.plot(time, isf_self[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='*', markersize='4', fillstyle='none')
-        #plt.plot(time, isf_int[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='x', markersize='4', fillstyle='none')
-        plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$, total" %(kx))
-
+    for ii, kMod in enumerate(md.k_mods):
+        #popt, pcov = curve_fit(fitFunc_exp, time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii])
+        plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='o', markersize='4', fillstyle='none')
+        #plt.plot(time[0:np.shape(isf_self)[0]], isf_int[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='x', markersize='4', fillstyle='none')
+        plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$, total" %(kMod))
+        #plt.plot(time[0:np.shape(isf_self)[0]], fitFunc_exp(time[0:np.shape(isf_self)[0]], popt[0], popt[1], popt[2]), color="black", linestyle='dotted', label=r"Fit")
     plt.ylabel(r"ISF", fontsize=14)
-    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.xlabel(r"Simulation time, $t-t_0$", fontsize=14)
     plt.ylim(bottom=0)
     plt.tight_layout()
     plt.legend()
