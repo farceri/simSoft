@@ -4,29 +4,30 @@ import os
 from matplotlib import pyplot as plt
 import matplotlib.animation as animation
 from scipy.optimize import curve_fit
+from numba import jit, njit, prange
 import time
 np.random.seed(0)
-#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 30 1 100000
+#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 100000
 
-def fitFunc(x, a, b, c):
+def fitFunc_pow(x, a, b, c):
     return a * (x**b) + c
 
 def fitFunc_lin(x, a, b):
     return a * x + b
 
-def fitFunc_exp(x, a, b, c):
-    return a * np.exp(-b * x) + c
+def fitFunc_exp(x, a, b, c, d):
+    return a * np.exp((x/b)**c) + d
 
 class MolecularDynamics:
 
     def __init__(self, num_particles=100, temperature=0.1, potentialType="WCA", dt=0.0001, 
-                 gamma=1.0, mass=1.0, Lx=10, Ly=10, cutoff=3, initialConf=False, figures=False, interaction=False):
+                 mass=1.0, Lx=30, Ly=30, cutoff=3, initialConf=False, figures=False, interaction=True):
 
         self.num_particles = num_particles
         self.potentialType = potentialType
         self.mass = mass
         self.dt = dt
-        self.gamma = gamma  # Friction coefficient for Langevin dynamics
+        self.gamma = 1.0  # Friction coefficient for Langevin dynamics
         self.temperature = temperature
         self.kB = 1.0  # Boltzmann constant (arbitrary units)
         self.box_size = np.array([Lx, Ly])
@@ -75,7 +76,7 @@ class MolecularDynamics:
             self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
         
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
-        self.neighbours_positions = np.copy(self.positions) # Store the last needed configuration for the neighbours update
+        self.lastsaved_positions = np.copy(self.positions) # Store the last needed configuration for the neighbours update
         self.forces = np.zeros((num_particles, 2))
         self.forcesContainer = []
         self.allforcesContainer = []
@@ -86,10 +87,6 @@ class MolecularDynamics:
         self.all_positions = []
         self.all_unwrapped_positions = []
         self.positions_save_freq = 1000
-
-        self.k_mods = 0
-        self.kx = 0
-        self.ky = 0
 
         # Set size for interacting particles - no force is implemented yet
         self.interaction = interaction
@@ -146,7 +143,7 @@ class MolecularDynamics:
                     
             self.neighbours.append(ii_list.copy())
         
-        self.neighbours_positions = self.positions
+        self.lastsaved_positions = self.positions
 
     def compute_disk_neighbours(self):
         """"Computing nearest neighbours based on simple disk distance."""
@@ -164,7 +161,7 @@ class MolecularDynamics:
                 
                 self.neighbours.append(ii_list.copy())
 
-        self.neighbours_positions = self.positions
+        self.lastsaved_positions = self.positions
 
     def compute_LJ_forces(self):
         """Shifted forces using LJ potential."""
@@ -270,63 +267,59 @@ class MolecularDynamics:
         return msd
 
     def compute_isf(self, inf_lim, sup_lim):
-        "Compute the Intermediate Scattering Function for different k values with mean over different t0."
+        "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
 
-        #self.k_mods = np.arange((2*np.pi)/self.box_size[0], (2*np.pi)+(2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0])
-        self.k_mods = np.array(((2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0], (2*np.pi)))
-        isf_self = np.zeros((np.shape(self.k_mods)[0]), dtype=complex)
-        isf_int = np.zeros((np.shape(self.k_mods)[0]), dtype=complex)
+        print("Computing ISF with t every", self.positions_save_freq, "steps.")
+        self.kmods = np.array(((2*np.pi)/self.box_size[0], 2*(2*np.pi)/self.box_size[0], (2*np.pi)))
+        angles = np.arange(0, 2*np.pi, np.pi/4)
+        isf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+        isf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         #mask = ~np.eye(self.num_particles, dtype=bool)
-        isf_total_self = np.zeros((sup_lim, (np.shape(self.k_mods)[0])), dtype=complex)
-        isf_total_int = np.zeros((sup_lim, (np.shape(self.k_mods)[0])), dtype=complex)
+        isf_total_self = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
+        isf_total_int = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
 
-        self.kx = self.k_mods
-        self.ky = self.kx * 0
-        k_vec = np.array((self.kx, self.ky))
         for t0 in range(inf_lim, sup_lim):
             temporary_ip = self.all_unwrapped_positions[t0]
             for t in range(t0, sup_lim):
-                for ii in range(int(np.shape(self.kx)[0])):
-                    isf_self[ii] = np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), k_vec[:, ii])))/self.num_particles
-                    isf_int[ii] = np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), k_vec[:, ii])))/(self.num_particles*(self.num_particles-1))
+                isf_self = np.zeros_like(isf_self)
+                isf_int = np.zeros_like(isf_int)
+                for ii, kMod in enumerate(self.kmods):
+                    for angle in angles:
+                        kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle)))
+                        isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), kVec)))/(self.num_particles * np.shape(angles)[0])
+                        isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), kVec)))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
                 isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
                 isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
 
-        # Temporary add
-        """numDirs = 10
-        angles = np.linspace(0, 2*np.pi, numDirs, endpoint=False)
-        for t0 in range(inf_lim, sup_lim):
-            temporary_ip = self.all_unwrapped_positions[t0]
-            for t in range(t0, sup_lim):
-                isf_self *= 0
-                isf_int *= 0
-                for ii, kMod in enumerate(self.k_mods):
-                    self.kx = kMod * np.cos(angles)
-                    self.ky = kMod * np.sin(angles)
-                    k_vecs = np.stack([self.kx, self.ky], axis=1)
-                    for k_vec in k_vecs:
-                        isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), k_vec)))/(self.num_particles*numDirs)
-                        isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), k_vec)))/(self.num_particles*(self.num_particles-1)*numDirs)
-                isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
-                isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))"""
-                
         return isf_total_self, isf_total_int
 
 def part_evolution(num_particles, positions, md, points, step):
     """Animation of the particles."""
 
     fig = plt.figure()
-    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/md.cellDivision, step=md.box_size[0]/md.cellDivision))
-    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/md.cellDivision, step=md.box_size[1]/md.cellDivision))
-    plt.grid(color = 'lightgrey', linestyle = '--', linewidth = 0.5)
+    ax = fig.add_subplot(111)
+    subdivision = 10
+    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/subdivision, step=md.box_size[0]/subdivision))
+    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/subdivision, step=md.box_size[1]/subdivision))
+    #plt.grid(color = 'lightgrey', linestyle = '--', linewidth = 0.5)
     scat_dic = {}
     line_dic = {}
+
+    # Represent the correct size of the diameter
+    radius = md.sigma/2
+    trans = ax.transData.transform
+    inv = fig.dpi_scale_trans.inverted().transform  
+    x0, y0 = trans((0,0))
+    x1, y1 = trans((radius, 0))
+    radius_pixels = x1 - x0
+
     for ii in range(num_particles):
-        scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=15, color='steelblue')
+        scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=radius_pixels**2, 
+                                                     facecolor='goldenrod', edgecolor="black", linewidth=0.7)
         #line_dic["line{0}".format(ii)] = plt.plot(positions[ii, 0, 0], positions[ii, 1, 0])[0]       
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
-    plt.title(r"N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff))
+    plt.title(r"N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff/md.sigma))
     plt.xlabel("x")
     plt.ylabel("y")
     plt.gca().set_aspect('equal')
@@ -394,12 +387,22 @@ if __name__ == '__main__':
     directory = sys.argv[1] # Directory for input and output
     integrator = sys.argv[2] # Integrator type - options are NVE and Langevin
     potentialType = sys.argv[3] # Options are LJ and WCA
-    num_particles = int(sys.argv[4])
-    temperature = float(sys.argv[5])
-    num_steps = int(float(sys.argv[6])) # Number of integration steps
+    num_steps = int(float(sys.argv[4])) # Number of integration steps
+    num_particles = int(50)
+    temperature = float(10)
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    
+
+    # Control what graphs to show
+    compute_msd = False
+    compute_isf = False
+    compute_gif = True
+
+    # Control the parameters
+    particles = np.array((50, 100, 150), dtype=int)
+    temperatures = np.array((1, 10, 100), dtype=float)
+    frictions = np.array((0.2, 1.0, 1.5), dtype=float)
+
     # Create md object with input settings - more settings can be added
     md = MolecularDynamics(num_particles, temperature, potentialType)
     md.positions_save_freq = int(num_steps/100)
@@ -414,7 +417,7 @@ if __name__ == '__main__':
 
     # Run integration, store and print data at given frequency
     for step in range(num_steps + save_freq):
-        distances = md.positions - md.neighbours_positions
+        distances = md.positions - md.lastsaved_positions
         distances -= np.round(distances/md.box_size) * md.box_size
         distance = np.linalg.norm(distances, axis=1)
         if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
@@ -426,7 +429,7 @@ if __name__ == '__main__':
             md.velocity_verlet_langevin()
         if step % save_freq == 0:
             temp = np.append(temp, md.compute_temperature())
-            msd = np.append(msd, md.compute_msd())
+            if compute_msd : msd = np.append(msd, md.compute_msd())
             potential = np.append(potential, md.potentialEnergy)
             kinetic = np.append(kinetic, md.compute_kineticenergy())
         if step % md.positions_save_freq == 0:
@@ -434,13 +437,14 @@ if __name__ == '__main__':
             md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
         if step % print_freq == 0:
             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
-    isf_self, isf_int = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
+    
+    if compute_isf : isf_self, isf_int = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
 
     print("It took %fs" %(time.time()-start))
     # Plot in a gif the particles moving
     md.all_positions = np.array(md.all_positions)
     md.all_positions = np.stack(md.all_positions, axis=-1)
-    #part_evolution(num_particles, md.all_positions, md, 1, 1)
+    if compute_gif : part_evolution(num_particles, md.all_positions, md, 1, 1)
     
     # Store time, temperature and energy in a single file
     time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
@@ -464,41 +468,46 @@ if __name__ == '__main__':
     plt.savefig(directory + "/energies.png", transparent=False, format="png")
 
     # Plot mean squared displacement
-    plt.clf()
-    eq = md.gamma*md.dt*save_freq
-    plt.title(r"MSD for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
-    plt.plot(time, msd, color='steelblue', linestyle='solid', marker='o', markersize='3', fillstyle='none', label="MSD over simulation time")
-    #popt, pcov = curve_fit(fitFunc, time[:int(1/eq)], msd[:int(1/eq)])
-    #plt.plot(time[:int(1/eq)], popt[0] * (time[:int(1/eq)]**popt[1]) + popt[2], color="black", linestyle="dotted", label=r"Fit: $\propto t^{%.1f}$" %(popt[1]))
-    #popt, pcov = curve_fit(fitFunc_lin, time[int(6/eq):], msd[int(6/eq):])
-    #plt.plot(time[int(6/eq):], popt[0] * (time[int(6/eq):]) + popt[1], color="orchid", linestyle="dotted", label=r"Fit: %.1f$\cdot$t" %(popt[0]))
-    #print("The thing should be: ", 4*(md.temperature/md.gamma))
-    plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
-    plt.xlabel(r"Simulation time, $t$", fontsize=14)
-    plt.ylim(bottom=0)
-    plt.tight_layout()
-    plt.legend()
-    plt.savefig(directory + "/msd.png", transparent=False, format="png")
+    if compute_msd:
+        plt.clf()
+        eq = md.gamma*md.dt*save_freq
+        plt.title(r"MSD for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
+        plt.plot(time, msd, color='steelblue', linestyle='solid', marker='o', markersize='3', fillstyle='none', label="MSD over simulation time")
+        #popt, pcov = curve_fit(fitFunc_pow, time[:int(1/eq)], msd[:int(1/eq)])
+        #plt.plot(time[:int(1/eq)], popt[0] * (time[:int(1/eq)]**popt[1]) + popt[2], color="black", linestyle="dotted", label=r"Fit: $\propto t^{%.1f}$" %(popt[1]))
+        #popt, pcov = curve_fit(fitFunc_lin, time[int(6/eq):], msd[int(6/eq):])
+        #plt.plot(time[int(6/eq):], popt[0] * (time[int(6/eq):]) + popt[1], color="orchid", linestyle="dotted", label=r"Fit: %.1f$\cdot$t" %(popt[0]))
+        #print("The thing should be: ", 4*(md.temperature/md.gamma))
+        plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
+        plt.xlabel(r"Simulation time, $t$", fontsize=14)
+        plt.ylim(bottom=np.min(msd)*10000, top=np.max(msd)*100)
+        plt.tight_layout()
+        plt.xscale("log")
+        plt.yscale("log")
+        plt.legend()
+        plt.savefig(directory + "/msd.png", transparent=False, format="png")
 
     # Plot intermediate scattering function
-    plt.clf()
-    plt.title(r"ISF for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
-    cmap = plt.get_cmap("viridis")  
-    n_colors = int(np.shape(isf_self)[1])
-    colors = [cmap(ii / (n_colors - 1)) for ii in range(n_colors)]
-    for ii, kMod in enumerate(md.k_mods):
-        #popt, pcov = curve_fit(fitFunc_exp, time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii])
-        plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='o', markersize='4', fillstyle='none')
-        #plt.plot(time[0:np.shape(isf_self)[0]], isf_int[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='x', markersize='4', fillstyle='none')
-        plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$, total" %(kMod))
-        #plt.plot(time[0:np.shape(isf_self)[0]], fitFunc_exp(time[0:np.shape(isf_self)[0]], popt[0], popt[1], popt[2]), color="black", linestyle='dotted', label=r"Fit")
-    plt.ylabel(r"ISF", fontsize=14)
-    plt.xlabel(r"Simulation time, $t-t_0$", fontsize=14)
-    plt.ylim(bottom=0)
-    plt.tight_layout()
-    plt.legend()
-    plt.savefig(directory + "/isf.png", transparent=False, format="png")
+    if compute_isf:
+        plt.clf()
+        plt.title(r"ISF for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
+        cmap = plt.get_cmap("viridis")  
+        n_colors = int(np.shape(isf_self)[1])
+        colors = [cmap(ii / (n_colors - 1)) for ii in range(n_colors)]
+        for ii, kMod in enumerate(md.kmods):
+            plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii], color=colors[ii], alpha=0.5, linestyle='solid', marker='o', markersize='4', fillstyle='none')
+            plt.plot(time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii], color=colors[ii], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$, total" %(kMod))
+            #popt, pcov = curve_fit(fitFunc_exp, time[0:np.shape(isf_self)[0]], isf_self[:, ii] + isf_int[:, ii])
+            #plt.plot(time[0:np.shape(isf_self)[0]], fitFunc_exp(time[0:np.shape(isf_self)[0]], popt[0], popt[1], popt[2], popt[3]), color="black", linestyle='dotted', label=r"Fit")
+        plt.ylabel(r"ISF", fontsize=14)
+        plt.xlabel(r"Simulation time, $t-t_0$", fontsize=14)
+        plt.ylim(bottom=0)
+        plt.xscale("log")
+        plt.tight_layout()
+        plt.legend()
+        plt.savefig(directory + "/isf.png", transparent=False, format="png")
 
+    # Other studies
     if md.figures:
         # Plotting the potential, force and cutoff
         fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
