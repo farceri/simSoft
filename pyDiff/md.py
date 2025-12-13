@@ -16,7 +16,7 @@ def fitFunc_lin(x, a, b):
     return a * x + b
 
 def fitFunc_exp(x, a, b, c, d):
-    return a * np.exp((x/b)**c) + d
+    return a * np.exp(-(x**b)/c) + d
 
 def smallOrder():
     print("-------------------------------------------------")
@@ -280,7 +280,6 @@ class MolecularDynamics:
         "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
 
         # print("Computing ISF with t every", self.positions_save_freq, "steps.")
-        self.kmods = np.array(((2*np.pi)/self.box_size[0], 14*(2*np.pi)/self.box_size[0], (2*np.pi)))
         angles = np.arange(0, 2*np.pi, np.pi/4)
         isf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         isf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
@@ -300,6 +299,12 @@ class MolecularDynamics:
                         isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), kVec)))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
                 isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
                 isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
+
+        if (np.any(np.abs(np.imag(isf_total_self)) > 1e-4) or np.any(np.abs(np.imag(isf_total_int))  > 1e-4)):
+            print("The imaginary part is absolutely too big.")
+
+        isf_total_self = np.real(isf_total_self)
+        isf_total_int = np.real(isf_total_int)
 
         return isf_total_self, isf_total_int
 
@@ -407,19 +412,20 @@ if __name__ == '__main__':
 
     # Control what graphs to show 
     compute_energy = False
-    compute_msd = False
-    compute_isf = False
+    compute_msd = True
+    compute_isf = True
     compute_gif = False
     store_data = False
     interaction = False
 
     # Control the parameters (to have a single run, just put a single value for each)
-    particles = np.array([50], dtype=int)
-    temperatures = np.array([10, 50], dtype=float)
+    particles = np.array([100], dtype=int)
+    temperatures = np.array([10], dtype=float)
     frictions = np.array([1.0], dtype=float)
     msd_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], int(num_steps/save_freq) + 1))
+    kmods = np.array([2*np.pi]) 
     isf_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], 
-                          int(num_steps/save_freq) + 1, 3, 2))
+                          int(num_steps/save_freq) + 1, np.shape(kmods)[0], 2))
 
     for ii, num_particles in enumerate(particles):
         for jj, temperature in enumerate(temperatures):
@@ -427,6 +433,7 @@ if __name__ == '__main__':
 
                 # Create md object with input settings - more settings can be added
                 md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction)
+                md.kmods = kmods/md.box_size[0]
                 md.positions_save_freq = save_freq
 
                 # Create arrays for storing energy and msd
@@ -461,8 +468,7 @@ if __name__ == '__main__':
                     if step % print_freq == 0:
                         print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
                 
-                if compute_msd:
-                    msd_total[ii, jj, kk, :] = msd
+                if compute_msd: msd_total[ii, jj, kk, :] = msd
 
                 if compute_isf: 
                     isf_total[ii, jj, kk, :, :, 0], isf_total[ii, jj, kk, :, :, 1] = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
@@ -504,8 +510,9 @@ if __name__ == '__main__':
     if compute_msd:
         plt.clf()
         eq = md.gamma*md.dt*save_freq
-        if integrator == 'nve': plt.title(r"MSD with interaction:%s" %(interaction), fontsize=16)
-        else : plt.title(r"MSD with interaction:%s and Langevin" %(interaction), fontsize=16)
+        fit = True
+        if integrator == 'nve': plt.title(r"MSD with interaction:%s and Langevin:False" %(interaction), fontsize=16)
+        else : plt.title(r"MSD with interaction:%s and Langevin:True" %(interaction), fontsize=16)
         cmap = plt.get_cmap("viridis")  
         n_colors = int(np.shape(particles)[0]) * int(np.shape(temperatures)[0]) * int(np.shape(frictions)[0]) 
         colors = [cmap(ii / (n_colors)) for ii in range(n_colors)]
@@ -513,12 +520,29 @@ if __name__ == '__main__':
         for ii, num_particles in enumerate(particles):
             for jj, temperature in enumerate(temperatures):
                 for kk, gamma in enumerate(frictions):
-                    if integrator == 'nve': plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='solid', marker='o', markersize='3', fillstyle='none', 
-                             label=r"N=%d ($\rho$=%.2f), T=%.1f" %(num_particles, num_particles/(md.box_size[0]**2), temperature))
-                    else: plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='solid', marker='o', markersize='3', fillstyle='none', 
-                             label=r"N=%d ($\rho$=%.2f), T=%.1f, $\gamma$=%.1f" %(num_particles, num_particles/(md.box_size[0]**2), temperature, gamma))
+                    if integrator == 'nve': 
+                        if (interaction == False) and fit:
+                            popt, pcov = curve_fit(fitFunc_pow, time, msd_total[ii, jj, kk, :]) 
+                            plt.plot(time, fitFunc_pow(time, popt[0], popt[1], popt[2]), color=colors[counter], linestyle='solid', linewidth=1) 
+                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$\rho$=%.2f, T=%.1f, $\propto t^{%.1f}$" %(num_particles/(md.box_size[0]**2), temperature, popt[1]))
+                        else:
+                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$\rho$=%.2f, T=%.1f" %(num_particles/(md.box_size[0]**2), temperature))
+                    elif integrator == 'langevin': 
+                        if (interaction == False) and fit:
+                            # Ballistic regime
+                            popt1, pcov1 = curve_fit(fitFunc_pow, time[:int(1/eq)], msd_total[ii, jj, kk, :int(1/eq)]) 
+                            plt.plot(time[:int(1/eq)], fitFunc_pow(time[:int(1/eq)], popt1[0], popt1[1], popt1[2]), color=colors[counter], linestyle='solid', linewidth=1) 
+                            # Diffusive regime
+                            popt2, pcov2 = curve_fit(fitFunc_lin, time[int(6/eq):], msd_total[ii, jj, kk, int(6/eq):]) 
+                            plt.plot(time[int(6/eq):], fitFunc_lin(time[int(6/eq):], popt2[0], popt2[1]), color=colors[counter], linestyle='solid', linewidth=1) 
+                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $\propto t^{%.1f}\rightarrow\propto t$" %(num_particles/(md.box_size[0]**2), temperature, gamma, popt1[1]))
+                        else:
+                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(num_particles/(md.box_size[0]**2), temperature, gamma))
                     counter += 1
-                    #popt, pcov = curve_fit(fitFunc_pow, time[:int(1/eq)], msd[:int(1/eq)])
         plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
         plt.xlabel(r"Simulation time, $t$", fontsize=14)
         plt.tight_layout()
@@ -531,31 +555,73 @@ if __name__ == '__main__':
     # Plot intermediate scattering function
     if compute_isf:
         plt.clf()
-        if integrator == 'nve': plt.title(r"ISF with interaction:%s" %(interaction), fontsize=16)
-        else : plt.title(r"ISF with interaction:%s and Langevin" %(interaction), fontsize=16)
+        eq = md.gamma*md.dt*save_freq
+        fit = True
+        if integrator == 'nve': plt.title(r"ISF with interaction:%s and Langevin:False" %(interaction), fontsize=16)
+        else : plt.title(r"ISF with interaction:%s and Langevin:True" %(interaction), fontsize=16)
         cmap = plt.get_cmap("viridis")  
         n_colors = int(np.shape(md.kmods)[0]) 
-        colors = [cmap(ii / (n_colors - 1)) for ii in range(n_colors)]
-        counter = 1
+        colors = [cmap(ii / (n_colors)) for ii in range(n_colors)]
+        taus = np.zeros((np.shape(temperatures)[0], np.shape(md.kmods)[0]))
         transparent = int(np.shape(particles)[0]) * int(np.shape(temperatures)[0]) * int(np.shape(frictions)[0]) 
+        transparency = 1/transparent
         for ii, num_particles in enumerate(particles):
             for jj, temperature in enumerate(temperatures):
                 for kk, gamma in enumerate(frictions):
                     for mm, kMod in enumerate(md.kmods):
-                        if integrator == 'nve': plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
-                                color=colors[mm], linestyle='solid', marker='o', markersize='4', fillstyle='none', alpha = counter,
-                                label=r"N=%d ($\rho$=%.2f), T=%.1f, $|k|=%.1f$" %(num_particles, num_particles/(md.box_size[0]**2), temperature, kMod))
-                        else: plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
-                                color=colors[mm], linestyle='solid', marker='o', markersize='4', fillstyle='none', alpha = counter,
-                                label=r"N=%d ($\rho$=%.2f), T=%.1f, $\gamma$=%.1f, $|k|=%.1f$" %(num_particles, num_particles/(md.box_size[0]**2), temperature, gamma, kMod))
-                    counter -= 1/transparent
+                        #if np.shape(temperatures)[0] > 1: taus[ii, mm] = popt[1]
+                        if integrator == 'nve': 
+                            if (interaction == False) and fit:
+                                popt, pcov = curve_fit(fitFunc_exp, time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
+                                                maxfev=100000, p0=[1, 2, 1, 0])
+                                plt.plot(time[0:np.shape(isf_total)[3]], fitFunc_exp(time[0:np.shape(isf_total)[3]], popt[0], popt[1], popt[2], popt[3]), 
+                                        color=colors[mm], linewidth=1, linestyle='solid', alpha = transparency)
+                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
+                                         color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
+                                         label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$, $\propto e^{-(t-t_0)^{%.1f}/%.1f}$" %(num_particles/(md.box_size[0]**2), temperature, kMod, popt[1], popt[2]))
+                            else:
+                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
+                                         color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
+                                         label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$" %(num_particles/(md.box_size[0]**2), temperature, kMod))
+                        elif integrator == 'langevin': 
+                            if (interaction == False) and fit:
+                                popt1, pcov1 = curve_fit(fitFunc_exp, time[:int(1/eq)], isf_total[ii, jj, kk, :int(1/eq), mm, 0] + isf_total[ii, jj, kk, :int(1/eq), mm, 1], 
+                                               maxfev=100000, p0=[1, 2, 1, 0]) 
+                                plt.plot(time[:int(1/eq)], fitFunc_exp(time[:int(1/eq)], popt1[0], popt1[1], popt1[2], popt1[3]), 
+                                        color=colors[mm], linewidth=1, linestyle='solid', alpha = transparency)
+                                # Diffusive regime
+                                #popt2, pcov2 = curve_fit(fitFunc_exp, time[int(8/eq):], isf_total[ii, jj, kk, int(8/eq):, mm, 0] + isf_total[ii, jj, kk, int(8/eq):, mm, 1], 
+                                #                maxfev=100000, p0=[1, 1, 1, 0]) 
+                                #plt.plot(time[int(8/eq):], fitFunc_exp(time[int(8/eq):], popt2[0], popt2[1], popt2[2], popt2[3]), 
+                                #        color=colors[mm], linestyle='solid', alpha = transparency)
+                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
+                                        color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
+                                         label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-(t-t_0)^{%.1f}/%.1f}$" %(num_particles/(md.box_size[0]**2), temperature, gamma, kMod, popt1[1], popt1[2]))
+                            else:
+                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
+                                         color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
+                                         label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$" %(num_particles/(md.box_size[0]**2), temperature, gamma, kMod))
+                    transparency += 1/transparent
         plt.ylabel(r"ISF", fontsize=14)
         plt.xlabel(r"Simulation time, $t-t_0$", fontsize=14)
-        plt.ylim(bottom=0)
+        #plt.ylim(bottom=0)
         #plt.xscale("log")
+        plt.axhline(y=0, color="gray", linestyle="--")
         plt.tight_layout()
         plt.legend()
         plt.savefig(directory + "/isf.png", transparent=False, format="png")
+
+        """if np.shape(temperatures)[0] > 1:
+            plt.clf()
+            if integrator == 'nve': plt.title(r"$\tau$ with interaction:%s, increasing $T$" %(interaction), fontsize=16)
+            else : plt.title(r"\tau$ with interaction:%s, increasing $T and Langevin" %(interaction), fontsize=16)
+            for mm, kMod in enumerate(md.kmods):
+                plt.plot(temperatures, taus[:, mm], color=colors[mm], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$" %(kMod))
+            plt.ylabel(r"$\tau$", fontsize=14)
+            plt.xlabel(r"Temperature $T$", fontsize=14)
+            plt.tight_layout()
+            plt.legend()
+            plt.savefig(directory + "/tau.png", transparent=False, format="png")"""
 
     # Other studies
     if md.figures:
