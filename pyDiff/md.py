@@ -7,7 +7,7 @@ from scipy.optimize import curve_fit
 from numba import jit, njit, prange
 import time
 #np.random.seed(0)
-#python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 'nve' 'WCA' 100000
+# python md.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 100000
 
 def fitFunc_pow(x, a, b, c):
     return a * (x**b) + c
@@ -16,7 +16,7 @@ def fitFunc_lin(x, a, b):
     return a * x + b
 
 def fitFunc_exp(x, a, b, c, d):
-    return a * np.exp(-(x**b)/c) + d
+    return a * np.exp(-((x/c)**b)) + d
 
 def smallOrder():
     print("-------------------------------------------------")
@@ -29,7 +29,7 @@ def bigOrder():
 class MolecularDynamics:
 
     def __init__(self, num_particles=100, temperature=0.1, gamma=0.1, potentialType="WCA", dt=0.0001, 
-                 mass=1.0, Lx=30, Ly=30, cutoff=3, initialConf=False, figures=False, interaction=True):
+                 mass=1.0, Lx=10, Ly=10, cutoff=3, initialConf=False, figures=False, interaction=False):
 
         self.num_particles = num_particles
         self.potentialType = potentialType
@@ -54,13 +54,12 @@ class MolecularDynamics:
         print(f"Time step: {self.dt:.4f}\nBox size: Lx {Lx:.4f} and Ly {Ly:.4f}")
         if interaction : print(f"Potential type: {self.potentialType}")
         else : print("Free particles")
-        data = np.loadtxt(directory + os.sep + 'md_conf.dat')
         
         if initialConf:
             # Take the existing saved configuration
             data = np.loadtxt(directory + os.sep + 'md_conf.dat')
             self.positions = data[:, :2]
-            self.velocities = data[:, 2:]
+            #self.velocities = data[:, 2:]
         else:
             # Initialize positions in a grid 
             nSide = int(np.ceil(np.sqrt(self.num_particles)))
@@ -73,18 +72,19 @@ class MolecularDynamics:
             positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
             self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
 
-            # Initialize velocities
-            self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
-            #self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-            """# Re-sample outliers
-            vMax = self.cutoff/3
-            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
-            while outliers.any():
-                self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
-                self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-                outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
-            self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
-        
+        # Initialize velocities
+        self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
+        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+        """# Re-sample outliers
+        vMax = self.cutoff/3
+        outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax
+        while outliers.any():
+            self.velocities[outliers] = np.random.normal(0, 1, (np.sum(outliers), 2))
+            self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+            outliers = np.sqrt(np.sum(self.velocities**2, axis=1)) > vMax"""
+        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
+        #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
+
         self.initial_positions = np.copy(self.positions) # Store initial positions to compute the MSD
         self.lastsaved_positions = np.copy(self.positions) # Store the last needed configuration for the neighbours update
         self.forces = np.zeros((num_particles, 2))
@@ -98,7 +98,7 @@ class MolecularDynamics:
         self.all_unwrapped_positions = []
         self.positions_save_freq = 1000
 
-        # Set size for interacting particles - no force is implemented yet
+        # Set size for interacting particles 
         self.interaction = interaction
         """if self.interaction:
             # Set particle sizes based on the shortest interparticle distance.
@@ -329,14 +329,20 @@ def part_evolution(num_particles, positions, md, points, step):
     x0, y0 = trans((0,0))
     x1, y1 = trans((radius, 0))
     radius_pixels = x1 - x0
+    if md.interaction : size = radius_pixels**2
+    else : size = 20
 
     for ii in range(num_particles):
-        scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=radius_pixels**2, 
-                                                     facecolor='goldenrod', edgecolor="black", linewidth=0.7)
+        if ii != 0:
+            scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=size, 
+                                                     facecolor='cadetblue', edgecolor="black", linewidth=0.5)
+        else:
+            scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=size, 
+                                                     facecolor='firebrick', edgecolor="black", linewidth=0.5)
         #line_dic["line{0}".format(ii)] = plt.plot(positions[ii, 0, 0], positions[ii, 1, 0])[0]       
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
-    plt.title(r"N=%d, T=%.1f, cutoff=%.1f$\sigma$" %(md.num_particles, md.temperature, md.cutoff/md.sigma))
+    plt.title(r"N=%d, T=%.1f, cutoff=%.1f$\sigma, \rho=%.2f$" %(md.num_particles, md.temperature, md.cutoff/md.sigma, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)))
     plt.xlabel("x")
     plt.ylabel("y")
     plt.gca().set_aspect('equal')
@@ -404,101 +410,123 @@ if __name__ == '__main__':
     start = time.time()
     # Read input parameters
     directory = sys.argv[1] # Directory for input and output
-    integrator = sys.argv[2] # Integrator type - options are NVE and Langevin
-    potentialType = sys.argv[3] # Options are LJ and WCA
-    num_steps = int(float(sys.argv[4])) # Number of integration steps
+    num_steps = int(float(sys.argv[2])) # Number of integration steps
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
 
-    # Control what graphs to show 
+    # Code controls
+    iterations = 1
+    randomizingSteps = 10000 # Initial steps to do to randomize positions
     compute_energy = False
     compute_msd = True
-    compute_isf = True
+    compute_isf = False
     compute_gif = False
-    store_data = False
+    store_data = False 
     interaction = False
+    integrator = 'nve' # Options are nve and langevin
+    potentialType = 'WCA' # Options are LJ and WCA
 
     # Control the parameters (to have a single run, just put a single value for each)
-    particles = np.array([100], dtype=int)
-    temperatures = np.array([10], dtype=float)
+    particles = np.array([50], dtype=int)
+    temperatures = np.array([1.0], dtype=float)
     frictions = np.array([1.0], dtype=float)
     msd_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], int(num_steps/save_freq) + 1))
-    kmods = np.array([2*np.pi]) 
+    kmods = np.array([4*np.pi]) 
     isf_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], 
                           int(num_steps/save_freq) + 1, np.shape(kmods)[0], 2))
 
-    for ii, num_particles in enumerate(particles):
-        for jj, temperature in enumerate(temperatures):
-            for kk, gamma in enumerate(frictions):
+    for iteration in range(iterations):
+        
+        for ii, num_particles in enumerate(particles):
+            for jj, temperature in enumerate(temperatures):
+                for kk, gamma in enumerate(frictions):
 
-                # Create md object with input settings - more settings can be added
-                md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction)
-                md.kmods = kmods/md.box_size[0]
-                md.positions_save_freq = save_freq
+                    # Create md object with input settings - more settings can be added
+                    md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction)
+                    md.kmods = kmods/md.box_size[0]
+                    md.positions_save_freq = save_freq
 
-                # Create arrays for storing energy and msd
-                temp = np.empty(0)
-                msd = np.empty(0)
-                potential = np.empty(0)
-                kinetic = np.empty(0)
-                md.compute_disk_neighbours()
-                #md.compute_cell_neighbours()
+                    # Create arrays for storing energy and msd
+                    temp = np.empty(0)
+                    msd = np.empty(0)
+                    potential = np.empty(0)
+                    kinetic = np.empty(0)
+                    md.compute_disk_neighbours()
+                    #md.compute_cell_neighbours()
 
-                # Run integration, store and print data at given frequency
-                smallOrder()
-                for step in range(num_steps + save_freq):
-                    distances = md.positions - md.lastsaved_positions
-                    distances -= np.round(distances/md.box_size) * md.box_size
-                    distance = np.linalg.norm(distances, axis=1)
-                    if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
-                        md.compute_disk_neighbours() 
-                        #md.compute_cell_neighbours()
-                    if integrator == 'nve':
-                        md.velocity_verlet_nve()
-                    elif integrator == 'langevin':
-                        md.velocity_verlet_langevin()
-                    if step % save_freq == 0:
-                        temp = np.append(temp, md.compute_temperature())
-                        if compute_msd : msd = np.append(msd, md.compute_msd())
-                        potential = np.append(potential, md.potentialEnergy)
-                        kinetic = np.append(kinetic, md.compute_kineticenergy())
-                    if step % md.positions_save_freq == 0:
-                        md.all_positions.append(md.positions.copy())
-                        md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
-                    if step % print_freq == 0:
-                        print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
-                
-                if compute_msd: msd_total[ii, jj, kk, :] = msd
+                    smallOrder()
+                    print(f"Doing {randomizingSteps} randomizing steps...")
+                    for step in range(randomizingSteps):
+                        distances = md.positions - md.lastsaved_positions
+                        distances -= np.round(distances/md.box_size) * md.box_size
+                        distance = np.linalg.norm(distances, axis=1)
+                        if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
+                            md.compute_disk_neighbours() 
+                            #md.compute_cell_neighbours()
+                        if integrator == 'nve':
+                            md.velocity_verlet_nve()
+                        elif integrator == 'langevin':
+                            md.velocity_verlet_langevin()
 
-                if compute_isf: 
-                    isf_total[ii, jj, kk, :, :, 0], isf_total[ii, jj, kk, :, :, 1] = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
+                    # Run integration, store and print data at given frequency
+                    smallOrder()
+                    md.initial_positions = md.positions.copy()
+                    md.unwrapped_positions = md.positions.copy()
+                    for step in range(num_steps + save_freq):
+                        distances = md.positions - md.lastsaved_positions
+                        distances -= np.round(distances/md.box_size) * md.box_size
+                        distance = np.linalg.norm(distances, axis=1)
+                        if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
+                            md.compute_disk_neighbours() 
+                            #md.compute_cell_neighbours()
+                        if integrator == 'nve':
+                            md.velocity_verlet_nve()
+                        elif integrator == 'langevin':
+                            md.velocity_verlet_langevin()
+                        if step % save_freq == 0:
+                            temp = np.append(temp, md.compute_temperature())
+                            if compute_msd : msd = np.append(msd, md.compute_msd())
+                            potential = np.append(potential, md.potentialEnergy)
+                            kinetic = np.append(kinetic, md.compute_kineticenergy())
+                        if step % md.positions_save_freq == 0:
+                            md.all_positions.append(md.positions.copy())
+                            md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
+                        if step % print_freq == 0:
+                            print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
+                    
+                    if compute_msd: msd_total[ii, jj, kk, :] += msd/iterations
 
-                # Plot in a gif the particles moving
-                if compute_gif: 
-                    md.all_positions = np.array(md.all_positions)
-                    md.all_positions = np.stack(md.all_positions, axis=-1)  
-                    part_evolution(num_particles, md.all_positions, md, 1, 1)
+                    if compute_isf: 
+                        temp1, temp2 = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
+                        isf_total[ii, jj, kk, :, :, 0] += temp1/iterations
+                        isf_total[ii, jj, kk, :, :, 1] += temp2/iterations
+
+                    # Plot in a gif the particles moving
+                    if compute_gif: 
+                        md.all_positions = np.array(md.all_positions)
+                        md.all_positions = np.stack(md.all_positions, axis=-1)  
+                        part_evolution(num_particles, md.all_positions, md, 1, 1)
 
     smallOrder()
     print("It took %fs" %(time.time()-start))
     bigOrder()
     
-    time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
+    sim_time = np.arange(0, num_steps + save_freq, save_freq) * md.dt # Define time array
     if store_data:
         # Store time, temperature and energy in a single file
-        np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((time, temp, potential, kinetic)))
+        np.savetxt(directory + os.sep + 'md_data.dat', np.column_stack((sim_time, temp, potential, kinetic)))
         # Store also the last positions and velocities of the particles
         np.savetxt(directory + os.sep + 'md_conf.dat', np.column_stack((md.positions[:, 0], md.positions[:, 1], md.velocities[:, 0], md.velocities[:, 1])))
      
     # Plot energy versus time (valid only for last iteration for now)
     if compute_energy:
         plt.clf()
-        plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, md.num_particles/(md.box_size[0]**2), md.temperature), fontsize=16)
-        plt.plot(time, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
+        plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2), md.temperature), fontsize=16)
+        plt.plot(sim_time, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
         plt.tick_params(axis='both', labelsize=14)
-        plt.plot(time, potential, color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
+        plt.plot(sim_time, potential, color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
         plt.tick_params(axis='both', labelsize=14)
-        plt.plot(time, potential+kinetic, color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
+        plt.plot(sim_time, potential+kinetic, color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
         plt.tick_params(axis='both', labelsize=14)
         plt.ylabel("Energies", fontsize=14)
         plt.xlabel(r"Simulation time, $t$", fontsize=14)
@@ -509,7 +537,6 @@ if __name__ == '__main__':
     # Plot mean squared displacement
     if compute_msd:
         plt.clf()
-        eq = md.gamma*md.dt*save_freq
         fit = True
         if integrator == 'nve': plt.title(r"MSD with interaction:%s and Langevin:False" %(interaction), fontsize=16)
         else : plt.title(r"MSD with interaction:%s and Langevin:True" %(interaction), fontsize=16)
@@ -518,33 +545,36 @@ if __name__ == '__main__':
         colors = [cmap(ii / (n_colors)) for ii in range(n_colors)]
         counter = 0
         for ii, num_particles in enumerate(particles):
+            density = (num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
             for jj, temperature in enumerate(temperatures):
                 for kk, gamma in enumerate(frictions):
+                    eq = gamma*md.dt*save_freq
                     if integrator == 'nve': 
                         if (interaction == False) and fit:
-                            popt, pcov = curve_fit(fitFunc_pow, time, msd_total[ii, jj, kk, :]) 
-                            plt.plot(time, fitFunc_pow(time, popt[0], popt[1], popt[2]), color=colors[counter], linestyle='solid', linewidth=1) 
-                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                             label=r"$\rho$=%.2f, T=%.1f, $\propto t^{%.1f}$" %(num_particles/(md.box_size[0]**2), temperature, popt[1]))
+                            popt, pcov = curve_fit(fitFunc_pow, sim_time, msd_total[ii, jj, kk, :]) 
+                            plt.plot(sim_time, fitFunc_pow(sim_time, popt[0], popt[1], popt[2]), color=colors[counter], linestyle='solid', linewidth=1) 
+                            plt.plot(sim_time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$N$=%.0f, T=%.1f, $\propto t^{%.1f}$" %(num_particles, temperature, popt[1]))
                         else:
-                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                             label=r"$\rho$=%.2f, T=%.1f" %(num_particles/(md.box_size[0]**2), temperature))
+                            plt.plot(sim_time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$\rho$=%.2f, T=%.1f" %(density, temperature))
                     elif integrator == 'langevin': 
                         if (interaction == False) and fit:
                             # Ballistic regime
-                            popt1, pcov1 = curve_fit(fitFunc_pow, time[:int(1/eq)], msd_total[ii, jj, kk, :int(1/eq)]) 
-                            plt.plot(time[:int(1/eq)], fitFunc_pow(time[:int(1/eq)], popt1[0], popt1[1], popt1[2]), color=colors[counter], linestyle='solid', linewidth=1) 
+                            popt1, pcov1 = curve_fit(fitFunc_pow, sim_time[:int(1/eq)], msd_total[ii, jj, kk, :int(1/eq)]) 
+                            plt.plot(sim_time[:int(1/eq)], fitFunc_pow(sim_time[:int(1/eq)], popt1[0], popt1[1], popt1[2]), color=colors[counter], linestyle='solid', linewidth=1) 
                             # Diffusive regime
-                            popt2, pcov2 = curve_fit(fitFunc_lin, time[int(6/eq):], msd_total[ii, jj, kk, int(6/eq):]) 
-                            plt.plot(time[int(6/eq):], fitFunc_lin(time[int(6/eq):], popt2[0], popt2[1]), color=colors[counter], linestyle='solid', linewidth=1) 
-                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                             label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $\propto t^{%.1f}\rightarrow\propto t$" %(num_particles/(md.box_size[0]**2), temperature, gamma, popt1[1]))
+                            popt2, pcov2 = curve_fit(fitFunc_lin, sim_time[int(6/eq):], msd_total[ii, jj, kk, int(6/eq):]) 
+                            plt.plot(sim_time[int(6/eq):], fitFunc_lin(sim_time[int(6/eq):], popt2[0], popt2[1]), color=colors[counter], linestyle='solid', linewidth=1) 
+                            plt.plot(sim_time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto t^{%.1f}\rightarrow\propto t$" %(num_particles, temperature, gamma, popt1[1]))
                         else:
-                            plt.plot(time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                             label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(num_particles/(md.box_size[0]**2), temperature, gamma))
+                            plt.plot(sim_time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                             label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, temperature, gamma))
                     counter += 1
         plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
-        plt.xlabel(r"Simulation time, $t$", fontsize=14)
+        if integrator == 'langevin':  plt.xlabel(r"Simulation time, $t$", fontsize=14)
+        else: plt.xlabel(r"Simulation time, $t$", fontsize=14)
         plt.tight_layout()
         plt.ylim(bottom=0.1, top=1.5*np.max(msd_total))
         plt.xscale("log")
@@ -555,7 +585,6 @@ if __name__ == '__main__':
     # Plot intermediate scattering function
     if compute_isf:
         plt.clf()
-        eq = md.gamma*md.dt*save_freq
         fit = True
         if integrator == 'nve': plt.title(r"ISF with interaction:%s and Langevin:False" %(interaction), fontsize=16)
         else : plt.title(r"ISF with interaction:%s and Langevin:True" %(interaction), fontsize=16)
@@ -565,53 +594,58 @@ if __name__ == '__main__':
         taus = np.zeros((np.shape(temperatures)[0], np.shape(md.kmods)[0]))
         transparent = int(np.shape(particles)[0]) * int(np.shape(temperatures)[0]) * int(np.shape(frictions)[0]) 
         transparency = 1/transparent
+        tvalues = sim_time[0:np.shape(isf_total)[3]]
         for ii, num_particles in enumerate(particles):
+            density = (num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
             for jj, temperature in enumerate(temperatures):
                 for kk, gamma in enumerate(frictions):
+                    eq = gamma*md.dt*save_freq
                     for mm, kMod in enumerate(md.kmods):
-                        #if np.shape(temperatures)[0] > 1: taus[ii, mm] = popt[1]
                         if integrator == 'nve': 
                             if (interaction == False) and fit:
-                                popt, pcov = curve_fit(fitFunc_exp, time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
+                                popt, pcov = curve_fit(fitFunc_exp, tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
                                                 maxfev=100000, p0=[1, 2, 1, 0])
-                                plt.plot(time[0:np.shape(isf_total)[3]], fitFunc_exp(time[0:np.shape(isf_total)[3]], popt[0], popt[1], popt[2], popt[3]), 
+                                plt.plot(tvalues, fitFunc_exp(tvalues, popt[0], popt[1], popt[2], popt[3]), 
                                         color=colors[mm], linewidth=1, linestyle='solid', alpha = transparency)
-                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
+                                plt.plot(tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
                                          color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
-                                         label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$, $\propto e^{-(t-t_0)^{%.1f}/%.1f}$" %(num_particles/(md.box_size[0]**2), temperature, kMod, popt[1], popt[2]))
+                                         label=r"$N$=%.0f, T=%.0f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(num_particles, temperature, kMod, popt[2], popt[1]))
+                                if np.shape(temperatures)[0] > 1: taus[jj, mm] = popt[2]
                             else:
-                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
+                                plt.plot(tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
                                          color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
-                                         label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$" %(num_particles/(md.box_size[0]**2), temperature, kMod))
+                                         label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$" %(density, temperature, kMod))
                         elif integrator == 'langevin': 
                             if (interaction == False) and fit:
-                                popt1, pcov1 = curve_fit(fitFunc_exp, time[:int(1/eq)], isf_total[ii, jj, kk, :int(1/eq), mm, 0] + isf_total[ii, jj, kk, :int(1/eq), mm, 1], 
+                                popt1, pcov1 = curve_fit(fitFunc_exp, sim_time[:int(1/eq)], isf_total[ii, jj, kk, :int(1/eq), mm, 0] + isf_total[ii, jj, kk, :int(1/eq), mm, 1], 
                                                maxfev=100000, p0=[1, 2, 1, 0]) 
-                                plt.plot(time[:int(1/eq)], fitFunc_exp(time[:int(1/eq)], popt1[0], popt1[1], popt1[2], popt1[3]), 
+                                plt.plot(sim_time[0:int(1/eq)], fitFunc_exp(sim_time[:int(1/eq)], popt1[0], popt1[1], popt1[2], popt1[3]), 
                                         color=colors[mm], linewidth=1, linestyle='solid', alpha = transparency)
                                 # Diffusive regime
-                                #popt2, pcov2 = curve_fit(fitFunc_exp, time[int(8/eq):], isf_total[ii, jj, kk, int(8/eq):, mm, 0] + isf_total[ii, jj, kk, int(8/eq):, mm, 1], 
+                                #popt2, pcov2 = curve_fit(fitFunc_exp, sim_time[int(8/eq):], isf_total[ii, jj, kk, int(8/eq):, mm, 0] + isf_total[ii, jj, kk, int(8/eq):, mm, 1], 
                                 #                maxfev=100000, p0=[1, 1, 1, 0]) 
-                                #plt.plot(time[int(8/eq):], fitFunc_exp(time[int(8/eq):], popt2[0], popt2[1], popt2[2], popt2[3]), 
+                                #plt.plot(sim_time[int(8/eq):], fitFunc_exp(sim_time[int(8/eq):], popt2[0], popt2[1], popt2[2], popt2[3]), 
                                 #        color=colors[mm], linestyle='solid', alpha = transparency)
-                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
+                                plt.plot(tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
                                         color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
-                                         label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-(t-t_0)^{%.1f}/%.1f}$" %(num_particles/(md.box_size[0]**2), temperature, gamma, kMod, popt1[1], popt1[2]))
+                                         label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(num_particles, temperature, gamma, kMod, popt1[2], popt1[1]))
+                                if np.shape(temperatures)[0] > 1: taus[jj, mm] = popt[2]
                             else:
-                                plt.plot(time[0:np.shape(isf_total)[3]], isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
+                                plt.plot(tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
                                          color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
-                                         label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$" %(num_particles/(md.box_size[0]**2), temperature, gamma, kMod))
+                                         label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$" %(density, temperature, gamma, kMod))
                     transparency += 1/transparent
         plt.ylabel(r"ISF", fontsize=14)
-        plt.xlabel(r"Simulation time, $t-t_0$", fontsize=14)
+        if integrator == 'langevin':  plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
+        else: plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
         #plt.ylim(bottom=0)
-        #plt.xscale("log")
+        plt.xscale("log")
         plt.axhline(y=0, color="gray", linestyle="--")
         plt.tight_layout()
         plt.legend()
         plt.savefig(directory + "/isf.png", transparent=False, format="png")
 
-        """if np.shape(temperatures)[0] > 1:
+        if np.shape(temperatures)[0] > 1:
             plt.clf()
             if integrator == 'nve': plt.title(r"$\tau$ with interaction:%s, increasing $T$" %(interaction), fontsize=16)
             else : plt.title(r"\tau$ with interaction:%s, increasing $T and Langevin" %(interaction), fontsize=16)
@@ -619,9 +653,11 @@ if __name__ == '__main__':
                 plt.plot(temperatures, taus[:, mm], color=colors[mm], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$" %(kMod))
             plt.ylabel(r"$\tau$", fontsize=14)
             plt.xlabel(r"Temperature $T$", fontsize=14)
+            plt.xscale("log")
+            plt.yscale("log")
             plt.tight_layout()
             plt.legend()
-            plt.savefig(directory + "/tau.png", transparent=False, format="png")"""
+            plt.savefig(directory + "/tau.png", transparent=False, format="png")
 
     # Other studies
     if md.figures:
