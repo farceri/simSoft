@@ -97,6 +97,13 @@ class MolecularDynamics:
         self.all_positions = []
         self.all_unwrapped_positions = []
         self.positions_save_freq = 1000
+        self.chosenk = 0
+        self.iter = 0
+
+        # Activity variables
+        self.thetas = np.zeros(self.num_particles)
+        self.activity = np.sqrt(2 * self.temperature /self.mass)
+        self.tau = 0.01
 
         # Set size for interacting particles 
         self.interaction = interaction
@@ -262,6 +269,18 @@ class MolecularDynamics:
         self.forces += self.langevin_force()
         self.velocities += 0.5 * self.forces / self.mass * self.dt
 
+    def euler_maruyama(self):
+        """Euler-Maruyama integration for active brownian particles."""
+        if self.interaction:
+            if self.potentialType == "WCA":
+                self.compute_WCA_forces()
+            elif self.potentialType == "LJ":
+                self.compute_LJ_forces()   
+        self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
+        directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
+        self.positions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+        self.unwrapped_positions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+
     def compute_temperature(self):
         """Compute the temperature of the system from the kinetic energy."""
         kinetic_energy = 0.5 * self.mass * np.sum(self.velocities ** 2)
@@ -281,13 +300,49 @@ class MolecularDynamics:
 
         # print("Computing ISF with t every", self.positions_save_freq, "steps.")
         angles = np.arange(0, 2*np.pi, np.pi/4)
+        ssf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+        ssf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+        mask = ~np.eye(self.num_particles, dtype=bool)
+        ssf_total_self = np.ones((np.shape(self.kmods)[0]), dtype=complex)
+        ssf_total_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+
+        # Finding the maximum with the static structure factor
+        for t0 in range(inf_lim, sup_lim): 
+            #print("Doing", t0) 
+            ssf_int = np.zeros_like(ssf_int) 
+            for ii, kMod in enumerate(self.kmods): 
+                for angle in angles: 
+                    kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle))) 
+                    delta = self.all_unwrapped_positions[t0][:, None, :] - self.all_unwrapped_positions[t0] [None, :, :] 
+                    #delta -= self.box_size[0] * np.round(delta / self.box_size[0])
+                    delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1) 
+                    ssf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles) 
+            ssf_total_int[:] += (ssf_int) / (np.shape(angles)[0])
+        
+        ssf_total_int /= (sup_lim - inf_lim)
+        ssf_total_self = np.real(ssf_total_self)
+        ssf_total_int = np.real(ssf_total_int)
+        plt.clf()
+        plt.plot(self.kmods, ssf_total_self[:] + ssf_total_int[:], color="seagreen")
+        plt.title(r"SSF", fontsize=16)
+        plt.ylabel(r"S(k)", fontsize=14)
+        plt.xlabel(r"$k$ magnitudes", fontsize=14)
+        plt.tight_layout()
+        plt.savefig(directory + "/ssf.png", transparent=False, format="png")
+
+        # Finally compute the isf
+        if self.iter==0: 
+            self.kmods = np.array([self.kmods[np.argmax(ssf_total_self[:] + ssf_total_int[:])]])
+            self.chosenk = self.kmods[0]
+        else:
+            self.kmods = np.array([self.chosenk])
         isf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         isf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
-        #mask = ~np.eye(self.num_particles, dtype=bool)
         isf_total_self = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
         isf_total_int = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
 
         for t0 in range(inf_lim, sup_lim):
+            #print("Doing", t0)
             temporary_ip = self.all_unwrapped_positions[t0]
             for t in range(t0, sup_lim):
                 isf_self = np.zeros_like(isf_self)
@@ -296,7 +351,10 @@ class MolecularDynamics:
                     for angle in angles:
                         kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle)))
                         isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), kVec)))/(self.num_particles * np.shape(angles)[0])
-                        isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), kVec)))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
+                        delta = self.all_unwrapped_positions[t][:, None, :] - temporary_ip[None, :, :]  
+                        delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1)
+                        isf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
+                        # isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t][ :, None, :] - temporary_ip[None, :, :]), kVec)))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
                 isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
                 isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
 
@@ -305,7 +363,7 @@ class MolecularDynamics:
 
         isf_total_self = np.real(isf_total_self)
         isf_total_int = np.real(isf_total_int)
-
+        print(self.kmods)
         return isf_total_self, isf_total_int
 
 #-----------------------------------------OTHER-FUNCTIONS-----------------------------------------------
@@ -342,7 +400,8 @@ def part_evolution(num_particles, positions, md, points, step):
         #line_dic["line{0}".format(ii)] = plt.plot(positions[ii, 0, 0], positions[ii, 1, 0])[0]       
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
-    plt.title(r"N=%d, T=%.1f, cutoff=%.1f$\sigma, \rho=%.2f$" %(md.num_particles, md.temperature, md.cutoff/md.sigma, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)))
+    if md.interaction : plt.title(r"N=%d, T=%.1f, $\rho$=%.2f, $\sigma$=%.1f" %(md.num_particles, md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2), md.sigma))
+    else : plt.title(r"N=%d, T=%.1f" %(md.num_particles, md.temperature))
     plt.xlabel("x")
     plt.ylabel("y")
     plt.gca().set_aspect('equal')
@@ -418,22 +477,23 @@ if __name__ == '__main__':
     iterations = 1
     randomizingSteps = 10000 # Initial steps to do to randomize positions
     compute_energy = False
-    compute_msd = True
+    compute_msd = False
     compute_isf = False
     compute_gif = False
     store_data = False 
+    load_data = False # True if there is a file with initial coordinates
+    if load_data: randomizingSteps = 0
     interaction = False
-    integrator = 'nve' # Options are nve and langevin
+    integrator = 'nve' # Options are nve, langevin and eulerMaruyama
     potentialType = 'WCA' # Options are LJ and WCA
 
     # Control the parameters (to have a single run, just put a single value for each)
-    particles = np.array([50], dtype=int)
+    particles = np.array([100], dtype=int)
     temperatures = np.array([1.0], dtype=float)
     frictions = np.array([1.0], dtype=float)
     msd_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], int(num_steps/save_freq) + 1))
-    kmods = np.array([4*np.pi]) 
-    isf_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], 
-                          int(num_steps/save_freq) + 1, np.shape(kmods)[0], 2))
+    isf_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], int(num_steps/save_freq) + 1, 1, 2))
+    kvalue = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0]))
 
     for iteration in range(iterations):
         
@@ -442,8 +502,8 @@ if __name__ == '__main__':
                 for kk, gamma in enumerate(frictions):
 
                     # Create md object with input settings - more settings can be added
-                    md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction)
-                    md.kmods = kmods/md.box_size[0]
+                    md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction, initialConf = load_data)
+                    md.kmods = np.linspace((2*np.pi/md.box_size[0]), (4*np.pi), 30)
                     md.positions_save_freq = save_freq
 
                     # Create arrays for storing energy and msd
@@ -467,11 +527,15 @@ if __name__ == '__main__':
                             md.velocity_verlet_nve()
                         elif integrator == 'langevin':
                             md.velocity_verlet_langevin()
+                        elif integrator == 'eulerMaruyama':
+                            md.euler_maruyama()
 
                     # Run integration, store and print data at given frequency
                     smallOrder()
                     md.initial_positions = md.positions.copy()
                     md.unwrapped_positions = md.positions.copy()
+                    md.all_positions.append(md.positions.copy())
+                    md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
                     for step in range(num_steps + save_freq):
                         distances = md.positions - md.lastsaved_positions
                         distances -= np.round(distances/md.box_size) * md.box_size
@@ -483,6 +547,8 @@ if __name__ == '__main__':
                             md.velocity_verlet_nve()
                         elif integrator == 'langevin':
                             md.velocity_verlet_langevin()
+                        elif integrator == 'eulerMaruyama':
+                            md.euler_maruyama()
                         if step % save_freq == 0:
                             temp = np.append(temp, md.compute_temperature())
                             if compute_msd : msd = np.append(msd, md.compute_msd())
@@ -497,9 +563,12 @@ if __name__ == '__main__':
                     if compute_msd: msd_total[ii, jj, kk, :] += msd/iterations
 
                     if compute_isf: 
-                        temp1, temp2 = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0])
+                        md.iter = iteration
+                        md.chosenk = kvalue[ii, jj, kk]
+                        temp1, temp2 = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0]-1)
                         isf_total[ii, jj, kk, :, :, 0] += temp1/iterations
                         isf_total[ii, jj, kk, :, :, 1] += temp2/iterations
+                        if iteration == 0 : kvalue[ii, jj, kk] = md.chosenk
 
                     # Plot in a gif the particles moving
                     if compute_gif: 
@@ -558,7 +627,7 @@ if __name__ == '__main__':
                         else:
                             plt.plot(sim_time, msd_total[ii, jj, kk, :], color=colors[counter], linestyle='none', marker='o', markersize='3', fillstyle='none', 
                              label=r"$\rho$=%.2f, T=%.1f" %(density, temperature))
-                    elif integrator == 'langevin': 
+                    elif integrator == 'langevin' or integrator == 'eulerMaruyama': 
                         if (interaction == False) and fit:
                             # Ballistic regime
                             popt1, pcov1 = curve_fit(fitFunc_pow, sim_time[:int(1/eq)], msd_total[ii, jj, kk, :int(1/eq)]) 
