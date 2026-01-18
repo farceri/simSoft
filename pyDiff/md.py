@@ -101,9 +101,9 @@ class MolecularDynamics:
         self.iter = 0
 
         # Activity variables
-        self.thetas = np.zeros(self.num_particles)
-        self.activity = np.sqrt(2 * self.temperature /self.mass)
-        self.tau = 0.01
+        self.tau = self.dt
+        self.activity = np.sqrt(2 * self.temperature *self.kB / (self.gamma * self.tau))
+        self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
 
         # Set size for interacting particles 
         self.interaction = interaction
@@ -279,6 +279,7 @@ class MolecularDynamics:
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
         directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
         self.positions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+        self.apply_pbc()
         self.unwrapped_positions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
 
     def compute_temperature(self):
@@ -295,47 +296,49 @@ class MolecularDynamics:
         msd = np.mean(np.sum(displacement ** 2, axis=1))
         return msd
 
-    def compute_isf(self, inf_lim, sup_lim):
+    def compute_ssf(self, inf_lim, sup_lim, doCycle):
         "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
 
-        # print("Computing ISF with t every", self.positions_save_freq, "steps.")
         angles = np.arange(0, 2*np.pi, np.pi/4)
-        ssf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         ssf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         mask = ~np.eye(self.num_particles, dtype=bool)
         ssf_total_self = np.ones((np.shape(self.kmods)[0]), dtype=complex)
         ssf_total_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
 
         # Finding the maximum with the static structure factor
-        for t0 in range(inf_lim, sup_lim): 
-            #print("Doing", t0) 
-            ssf_int = np.zeros_like(ssf_int) 
-            for ii, kMod in enumerate(self.kmods): 
-                for angle in angles: 
-                    kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle))) 
-                    delta = self.all_unwrapped_positions[t0][:, None, :] - self.all_unwrapped_positions[t0] [None, :, :] 
-                    #delta -= self.box_size[0] * np.round(delta / self.box_size[0])
-                    delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1) 
-                    ssf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles) 
-            ssf_total_int[:] += (ssf_int) / (np.shape(angles)[0])
-        
-        ssf_total_int /= (sup_lim - inf_lim)
-        ssf_total_self = np.real(ssf_total_self)
-        ssf_total_int = np.real(ssf_total_int)
-        plt.clf()
-        plt.plot(self.kmods, ssf_total_self[:] + ssf_total_int[:], color="seagreen")
-        plt.title(r"SSF", fontsize=16)
-        plt.ylabel(r"S(k)", fontsize=14)
-        plt.xlabel(r"$k$ magnitudes", fontsize=14)
-        plt.tight_layout()
-        plt.savefig(directory + "/ssf.png", transparent=False, format="png")
+        if self.iter == 0 or doCycle:
+            for t0 in range(inf_lim, sup_lim): 
+                #print("Doing", t0) 
+                ssf_int = np.zeros_like(ssf_int) 
+                for ii, kMod in enumerate(self.kmods): 
+                    for angle in angles: 
+                        kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle))) 
+                        delta = self.all_unwrapped_positions[t0][:, None, :] - self.all_unwrapped_positions[t0] [None, :, :] 
+                        #delta -= self.box_size[0] * np.round(delta / self.box_size[0])
+                        delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1) 
+                        ssf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles) 
+                    ssf_total_int[ii] += (ssf_int[ii]) / (np.shape(angles)[0])
+            
+            ssf_total_int /= (sup_lim - inf_lim)
+            ssf_total_self = np.real(ssf_total_self)
+            ssf_total_int = np.real(ssf_total_int)
 
-        # Finally compute the isf
-        if self.iter==0: 
+        if self.iter == 0 and (not doCycle): 
             self.kmods = np.array([self.kmods[np.argmax(ssf_total_self[:] + ssf_total_int[:])]])
             self.chosenk = self.kmods[0]
-        else:
+        elif self.iter != 0 and (not doCycle):
             self.kmods = np.array([self.chosenk])
+
+        if doCycle:
+            return ssf_total_self, ssf_total_int
+
+    def compute_isf(self, inf_lim, sup_lim):
+        "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
+
+        # print("Computing ISF with t every", self.positions_save_freq, "steps.")
+        angles = np.arange(0, 2*np.pi, np.pi/4)
+        mask = ~np.eye(self.num_particles, dtype=bool)
+
         isf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         isf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
         isf_total_self = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
@@ -347,7 +350,7 @@ class MolecularDynamics:
             for t in range(t0, sup_lim):
                 isf_self = np.zeros_like(isf_self)
                 isf_int = np.zeros_like(isf_int)
-                for ii, kMod in enumerate(self.kmods):
+                for ii, kMod in enumerate(np.atleast_1d(self.chosenk)):
                     for angle in angles:
                         kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle)))
                         isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.all_unwrapped_positions[t] - temporary_ip), kVec)))/(self.num_particles * np.shape(angles)[0])
@@ -363,7 +366,7 @@ class MolecularDynamics:
 
         isf_total_self = np.real(isf_total_self)
         isf_total_int = np.real(isf_total_int)
-        print(self.kmods)
+        
         return isf_total_self, isf_total_int
 
 #-----------------------------------------OTHER-FUNCTIONS-----------------------------------------------
@@ -475,35 +478,38 @@ if __name__ == '__main__':
 
     # Code controls
     iterations = 1
-    randomizingSteps = 10000 # Initial steps to do to randomize positions
+    randomizingSteps = 5000 # Initial steps to do to randomize positions
     compute_energy = False
     compute_msd = False
-    compute_isf = False
+    compute_ssf = False
+    compute_isf = True
     compute_gif = False
-    store_data = False 
+    store_data = True 
     load_data = False # True if there is a file with initial coordinates
     if load_data: randomizingSteps = 0
     interaction = False
-    integrator = 'nve' # Options are nve, langevin and eulerMaruyama
+    integrator = 'eulerMaruyama' # Options are nve, langevin and eulerMaruyama
     potentialType = 'WCA' # Options are LJ and WCA
 
     # Control the parameters (to have a single run, just put a single value for each)
-    particles = np.array([100], dtype=int)
+    particles = np.array([50], dtype=int)
     temperatures = np.array([1.0], dtype=float)
-    frictions = np.array([1.0], dtype=float)
+    frictions = np.array([2.0], dtype=float)
     msd_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], int(num_steps/save_freq) + 1))
     isf_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], int(num_steps/save_freq) + 1, 1, 2))
     kvalue = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0]))
+    ssf_total = np.zeros((np.shape(particles)[0], np.shape(temperatures)[0], np.shape(frictions)[0], 30, 2))
 
-    for iteration in range(iterations):
-        
-        for ii, num_particles in enumerate(particles):
-            for jj, temperature in enumerate(temperatures):
-                for kk, gamma in enumerate(frictions):
+    for ii, num_particles in enumerate(particles):
+        for jj, temperature in enumerate(temperatures):
+            for kk, gamma in enumerate(frictions):
+
+                for iteration in range(iterations):
 
                     # Create md object with input settings - more settings can be added
                     md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction, initialConf = load_data)
                     md.kmods = np.linspace((2*np.pi/md.box_size[0]), (4*np.pi), 30)
+                    print("Iteration: ", iteration+1)
                     md.positions_save_freq = save_freq
 
                     # Create arrays for storing energy and msd
@@ -559,22 +565,28 @@ if __name__ == '__main__':
                             md.all_unwrapped_positions.append(md.unwrapped_positions.copy())
                         if step % print_freq == 0:
                             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
-                    
+                
                     if compute_msd: msd_total[ii, jj, kk, :] += msd/iterations
+
+                    if compute_ssf:
+                        temp1, temp2 = md.compute_ssf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0]-1, doCycle = True)
+                        ssf_total[ii, jj, kk, :, 0] += temp1/iterations
+                        ssf_total[ii, jj, kk, :, 1] += temp2/iterations
 
                     if compute_isf: 
                         md.iter = iteration
                         md.chosenk = kvalue[ii, jj, kk]
+                        md.compute_ssf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0]-1, doCycle = False)
                         temp1, temp2 = md.compute_isf(inf_lim = 0, sup_lim = np.shape(md.all_unwrapped_positions)[0]-1)
                         isf_total[ii, jj, kk, :, :, 0] += temp1/iterations
                         isf_total[ii, jj, kk, :, :, 1] += temp2/iterations
                         if iteration == 0 : kvalue[ii, jj, kk] = md.chosenk
 
-                    # Plot in a gif the particles moving
-                    if compute_gif: 
-                        md.all_positions = np.array(md.all_positions)
-                        md.all_positions = np.stack(md.all_positions, axis=-1)  
-                        part_evolution(num_particles, md.all_positions, md, 1, 1)
+                # Plot in a gif the particles moving
+                if compute_gif: 
+                    md.all_positions = np.array(md.all_positions)
+                    md.all_positions = np.stack(md.all_positions, axis=-1)  
+                    part_evolution(num_particles, md.all_positions, md, 1, 1)
 
     smallOrder()
     print("It took %fs" %(time.time()-start))
@@ -651,6 +663,34 @@ if __name__ == '__main__':
         plt.legend()
         plt.savefig(directory + "/msd.png", transparent=False, format="png")
 
+    # Plot static structure factor
+    if compute_ssf:
+        plt.clf()
+        fit = True
+        if integrator == 'nve': plt.title(r"SSF with interaction:%s and Langevin:False" %(interaction), fontsize=16)
+        else : plt.title(r"SSF with interaction:%s and Langevin:True" %(interaction), fontsize=16)
+        cmap = plt.get_cmap("viridis")  
+        n_colors = int(np.shape(particles)[0]) * int(np.shape(temperatures)[0]) * int(np.shape(frictions)[0]) 
+        colors = [cmap(ii / (n_colors)) for ii in range(n_colors)]
+        taus = np.zeros((np.shape(temperatures)[0], np.shape(md.kmods)[0]))
+        tvalues = sim_time[0:np.shape(isf_total)[3]]
+        for ii, num_particles in enumerate(particles):
+            density = (num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+            for jj, temperature in enumerate(temperatures):
+                for kk, gamma in enumerate(frictions):
+                    eq = gamma*md.dt*save_freq
+                    plt.plot(md.kmods, ssf_total[ii, jj, kk, :, 0] + ssf_total[ii, jj, kk, :, 1], 
+                             color=colors[int(np.shape(frictions)[0])*int(np.shape(temperatures)[0])*ii + int(np.shape(frictions)[0])*jj + kk], 
+                             linewidth=1, linestyle='solid', label=r"$\rho$=%.2f, T=%.1f, $\gamma=%.1f$" %(density, temperature, gamma))
+                    
+        plt.ylabel(r"SSF", fontsize=14)
+        if integrator == 'langevin':  plt.xlabel(r"|k|", fontsize=14)
+        #plt.ylim(bottom=0)
+        plt.axhline(y=1, color="gray", linestyle="--")
+        plt.tight_layout()
+        plt.legend()
+        plt.savefig(directory + "/ssf.png", transparent=False, format="png")
+
     # Plot intermediate scattering function
     if compute_isf:
         plt.clf()
@@ -658,7 +698,7 @@ if __name__ == '__main__':
         if integrator == 'nve': plt.title(r"ISF with interaction:%s and Langevin:False" %(interaction), fontsize=16)
         else : plt.title(r"ISF with interaction:%s and Langevin:True" %(interaction), fontsize=16)
         cmap = plt.get_cmap("viridis")  
-        n_colors = int(np.shape(md.kmods)[0]) 
+        n_colors = 1
         colors = [cmap(ii / (n_colors)) for ii in range(n_colors)]
         taus = np.zeros((np.shape(temperatures)[0], np.shape(md.kmods)[0]))
         transparent = int(np.shape(particles)[0]) * int(np.shape(temperatures)[0]) * int(np.shape(frictions)[0]) 
@@ -669,7 +709,7 @@ if __name__ == '__main__':
             for jj, temperature in enumerate(temperatures):
                 for kk, gamma in enumerate(frictions):
                     eq = gamma*md.dt*save_freq
-                    for mm, kMod in enumerate(md.kmods):
+                    for mm, kMod in enumerate(np.atleast_1d(kvalue[ii, jj, kk])):
                         if integrator == 'nve': 
                             if (interaction == False) and fit:
                                 popt, pcov = curve_fit(fitFunc_exp, tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
@@ -684,7 +724,8 @@ if __name__ == '__main__':
                                 plt.plot(tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1], 
                                          color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
                                          label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$" %(density, temperature, kMod))
-                        elif integrator == 'langevin': 
+                        #elif integrator == 'langevin': 
+                        else:
                             if (interaction == False) and fit:
                                 popt1, pcov1 = curve_fit(fitFunc_exp, sim_time[:int(1/eq)], isf_total[ii, jj, kk, :int(1/eq), mm, 0] + isf_total[ii, jj, kk, :int(1/eq), mm, 1], 
                                                maxfev=100000, p0=[1, 2, 1, 0]) 
@@ -694,7 +735,7 @@ if __name__ == '__main__':
                                 #popt2, pcov2 = curve_fit(fitFunc_exp, sim_time[int(8/eq):], isf_total[ii, jj, kk, int(8/eq):, mm, 0] + isf_total[ii, jj, kk, int(8/eq):, mm, 1], 
                                 #                maxfev=100000, p0=[1, 1, 1, 0]) 
                                 #plt.plot(sim_time[int(8/eq):], fitFunc_exp(sim_time[int(8/eq):], popt2[0], popt2[1], popt2[2], popt2[3]), 
-                                #        color=colors[mm], linestyle='solid', alpha = transparency)
+                                #        color=colors[mm], linewidth=1, linestyle='solid', alpha = transparency)
                                 plt.plot(tvalues, isf_total[ii, jj, kk, :, mm, 0] + isf_total[ii, jj, kk, :, mm, 1],
                                         color=colors[mm], marker='o', markersize='3', linestyle='none', fillstyle='none', alpha = transparency,
                                          label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(num_particles, temperature, gamma, kMod, popt1[2], popt1[1]))
@@ -714,11 +755,24 @@ if __name__ == '__main__':
         plt.legend()
         plt.savefig(directory + "/isf.png", transparent=False, format="png")
 
+        if store_data:
+            for ii, num_particles in enumerate(particles):
+                density = (num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+                for jj, temperature in enumerate(temperatures):
+                    for kk, gamma in enumerate(frictions):
+                        if integrator == 'langevin':
+                            np.savetxt(directory + os.sep + r'isf/NVTdens%.2fT%.1fgam%.1f.dat' %(density, temperature, gamma), 
+                                       np.column_stack((tvalues, isf_total[ii, jj, kk, :, 0, 0] + isf_total[ii, jj, kk, :, 0, 1])))
+                        elif integrator == 'eulerMaruyama':
+                            np.savetxt(directory + os.sep + r'isf/EMdens%.2fT%.1fgam%.1f.dat' %(density, temperature, gamma), 
+                                       np.column_stack((tvalues, isf_total[ii, jj, kk, :, 0, 0] + isf_total[ii, jj, kk, :, 0, 1])))
+
+        # This needs to be changed a bit
         if np.shape(temperatures)[0] > 1:
             plt.clf()
             if integrator == 'nve': plt.title(r"$\tau$ with interaction:%s, increasing $T$" %(interaction), fontsize=16)
             else : plt.title(r"\tau$ with interaction:%s, increasing $T and Langevin" %(interaction), fontsize=16)
-            for mm, kMod in enumerate(md.kmods):
+            for mm, kMod in enumerate(np.atleast_1d(kvalue[ii, jj, kk])):
                 plt.plot(temperatures, taus[:, mm], color=colors[mm], linestyle='solid', marker='o', markersize='4', fillstyle='none', label=r"$|k|=%.1f$" %(kMod))
             plt.ylabel(r"$\tau$", fontsize=14)
             plt.xlabel(r"Temperature $T$", fontsize=14)
