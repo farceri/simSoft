@@ -3,9 +3,11 @@ mdFunctions
 ----------
 These are the functions that are needed to study the MolecularDynamics class.
 """
-
+import os
+import pickle
 import numpy as np
 from matplotlib import pyplot as plt
+from scipy.optimize import curve_fit
 import matplotlib.animation as animation
 
 #-------------------------------------PRINT-VISUALS-----------------------------------------
@@ -34,8 +36,20 @@ def fitFunc_exp(xx: float, a: float, b: float, c: float, d: float) -> float:
 
 #--------------------------------------MSD-SSF-ISF------------------------------------------
 
-def compute_msd(positions):
-    """Compute the Mean Squared Displacement."""
+def compute_msd(positions: np.ndarray) -> np.ndarray:
+    """
+    This function computes the Mean Squared Displacement over the timesteps.
+
+    Parameters
+    ----------
+    positions : np.ndarray
+        Positions of the particles. The format must be [timestep, particleID, dimension].
+
+    Returns
+    ----------
+    msd : np.ndarray
+        Array of the MSD meaned over all particles in formt [deltaTimestep].
+    """
     initialPosition = positions[0]
     msd = np.zeros(np.shape(positions)[0]-1)
     for timestep in range(np.shape(positions)[0]-1):
@@ -43,14 +57,35 @@ def compute_msd(positions):
         msd[timestep] = np.mean(np.sum(displacement ** 2, axis=1))
     return msd
 
-def compute_ssf(unwrappedPositions, num_particles, inf_lim, sup_lim, kMods):
-    "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
+def compute_ssf(unwrappedPositions: np.ndarray, kMods: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    This function computes the Static Structure Factor over the timesteps meaned over 8 different
+    orientations of k and for different t0.
 
+    Parameters
+    ----------
+    unwrappedPositions : np.ndarray
+        Positions of the particles. The format must be [timestep, particleID, dimension].
+    kMods : np.ndarray
+        The array of modulus of k to use.
+
+    Returns
+    ----------
+    ssf_total_self, ssf_total_int : tuple[np.ndarray, np.ndarray]
+        The self and interacting part of the Static Structure Factor with format [kModValue].
+    chosenk : float
+        The value od k corresponding to the max of ssf_total_self + ssf_total_int.
+    """
+
+    num_particles = np.shape(unwrappedPositions)[1]
     angles = np.arange(0, 2*np.pi, np.pi/4)
     ssf_int = np.zeros((np.shape(kMods)[0]), dtype=complex)
     mask = ~np.eye(num_particles, dtype=bool)
     ssf_total_self = np.ones((np.shape(kMods)[0]), dtype=complex)
     ssf_total_int = np.zeros((np.shape(kMods)[0]), dtype=complex)
+
+    inf_lim = 0
+    sup_lim = np.shape(unwrappedPositions)[0]-1
 
     # Finding the maximum with the static structure factor
     for t0 in range(inf_lim, sup_lim): 
@@ -68,16 +103,31 @@ def compute_ssf(unwrappedPositions, num_particles, inf_lim, sup_lim, kMods):
     ssf_total_self = np.real(ssf_total_self)
     ssf_total_int = np.real(ssf_total_int)
 
-    chosenk = np.array([kMods[np.argmax(ssf_total_self[:] + ssf_total_int[:])]])
-    chosenk= chosenk[0]
+    return ssf_total_self, ssf_total_int
 
-    return ssf_total_self, ssf_total_int, chosenk
+def compute_isf(unwrappedPositions: np.ndarray, chosenk: float) -> tuple[np.ndarray, np.ndarray]:
+    """
+    This function computes the Intermediate Scattering Function over the timesteps different t0.
 
-def compute_isf(unwrappedPositions, num_particles, inf_lim, sup_lim, chosenk):
+    Parameters
+    ----------
+    unwrappedPositions : np.ndarray
+        Positions of the particles. The format must be [timestep, particleID, dimension].
+    chosenk : float
+        The value chosen previously to compute the Intermediate Scattering Function in.
+
+    Returns
+    ----------
+    isf_total_self, isf_total_int : tuple[np.ndarray, np.ndarray]
+        The self and interacting part of the Intermediate Scattering Function with format [deltaTimestep].
+    """
+
+    num_particles = np.shape(unwrappedPositions)[1]
+    inf_lim = 0
+    sup_lim = np.shape(unwrappedPositions)[0]-1
 
     angles = np.arange(0, 2*np.pi, np.pi/4)
     mask = ~np.eye(num_particles, dtype=bool)
-
     isf_self = np.zeros((1), dtype=complex)
     isf_int = np.zeros((1), dtype=complex)
     isf_total_self = np.zeros((sup_lim), dtype=complex)
@@ -251,3 +301,459 @@ def reduce_vectors(vector1: np.ndarray, vector2: np.ndarray, eps: float) -> tupl
     reduced_v2 = np.array([v2_sorted[np.array(gg)].mean() for gg in groups])
 
     return reduced_v1, reduced_v2
+
+#---------------------------------------MAIN-GRAPHS-----------------------------------------
+
+def energy_graph(md, simTime: np.ndarray, kinetic: np.ndarray, potential: np.ndarray, directory: str) -> None:
+    """
+    Plot the energy evolution over time.
+
+    Parameters
+    ----------
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+    simTime : np.ndarray
+        The time of the simulation.
+    kinetic : np.ndarray
+        The kinetic energy of the evolved simulation.
+    potential : np.ndarray
+        The potential energy of the evolved simulation.
+    directory : str
+        Directory in which to save the plot.
+
+    Returns
+    ----------
+    A plot comparing the potential, kinetic and total energy.
+    """
+
+    plt.clf()
+    plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2), md.temperature), fontsize=16)
+    plt.plot(simTime, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.plot(simTime, potential, color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.plot(simTime, potential+kinetic, color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.ylabel("Energies", fontsize=14)
+    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(directory + "/energies.png", transparent=False, format="png")
+
+def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md) -> None:
+    """
+    Plot the input Mean Squared Displacement with respect to time.
+
+    Parameters
+    ----------
+    simTime : np.ndarray
+        The time of the simulation.
+    msd : np.ndarray
+        MSD array which must be the same length as simTime.
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+
+    Returns
+    ----------
+    A plot showing the time evolution of Mean Squared Displacement.
+    """
+
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    eq = md.gamma*md.dt*md.positions_save_freq
+
+    if md.integrator == 'nve': 
+        if md.interaction == False:
+            popt, pcov = curve_fit(fitFunc_pow, simTime, msd) 
+            plt.plot(simTime, fitFunc_pow(simTime, popt[0], popt[1], popt[2]), color="seagreen", linestyle='solid', linewidth=1) 
+            plt.plot(simTime, msd, color="seagreen", linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\propto t^{%.1f}$" %(md.num_particles, md.temperature, popt[1]))
+        else:
+            plt.plot(simTime, msd, color="seagreen", linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$\rho$=%.2f, T=%.1f" %(density, md.temperature))
+    elif md.integrator == 'langevin' or md.integrator == 'em': 
+        if md.interaction == False:
+            # Ballistic regime
+            popt1, pcov1 = curve_fit(fitFunc_pow, simTime[:int(1/eq)], msd[:int(1/eq)]) 
+            plt.plot(simTime[:int(1/eq)], fitFunc_pow(simTime[:int(1/eq)], popt1[0], popt1[1], popt1[2]), color="seagreen", linestyle='solid', linewidth=1) 
+            # Diffusive regime
+            popt2, pcov2 = curve_fit(fitFunc_lin, simTime[int(6/eq):], msd[int(6/eq):]) 
+            plt.plot(simTime[int(6/eq):], fitFunc_lin(simTime[int(6/eq):], popt2[0], popt2[1]), color="seagreen", linestyle='solid', linewidth=1) 
+            plt.plot(simTime, msd, color="seagreen", linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto t^{%.1f}\rightarrow\propto t$" %(md.num_particles, md.temperature, md.gamma, popt1[1]))
+        else:
+            plt.plot(simTime, msd, color="seagreen", linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, md.temperature, md.gamma))
+
+def msdTotality(home: str, directoryList: list[str], title: str, outputName: str) -> None:
+    """
+    Plot which compares different plots of the Mean Squared Displacement with means over the iterations.
+
+    Parameters
+    ----------
+    home : srt
+        Directory where all other sub-directories are contained.
+    directoryList : list[str]
+        All subdirectories to consider.
+    title : srt
+        The title of the plot.
+    outputName : str
+        The name of the plot file.
+
+    Returns
+    ----------
+    A plot comparing the MSD values for different md objects.
+    """
+
+    highestValue = 0
+
+    plt.clf()
+    plt.title(title, fontsize=16)
+    # In the list there should be each super-directory that contributes
+    for directory in directoryList:
+        #print("\n", "Doing directory: ", directory, "\n")
+        
+        msd = None
+        for root, subdirectories, files in os.walk(directory):
+            subdirectories.sort()
+
+            # Mean between the iterations
+            for subdir in subdirectories:
+                #print("Doing subdirectory: ", subdir)
+
+                loadPath = os.path.join(directory, subdir)
+                evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
+                with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
+                    md = pickle.load(f)
+
+                if msd is None: msd = compute_msd(md.allUnwrappedPositions)/np.shape(subdirectories)[0]
+                else: msd += compute_msd(md.allUnwrappedPositions)/np.shape(subdirectories)[0]
+
+        highestValue = max(highestValue, np.max(msd))
+        msdPlotter(evolutionData[:, 0], msd, md)
+
+    plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
+    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.tight_layout()
+    plt.ylim(bottom=0.1, top=1.5*highestValue)
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.legend()
+    plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
+
+def ssfPlotter(kMods: np.ndarray, ssf_self: np.ndarray, ssf_int: np.ndarray, md) -> None:
+    """
+    Plot the input Static Structure Factor with respect to magnitudes of k.
+
+    Parameters
+    ----------
+    kMods : np.ndarray
+        The magnitudes of k values to use.
+    ssf_self : np.ndarray
+        SSF array of the self part.
+    ssf_int : np.ndarray
+        SSF array of the interacting part.
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+
+    Returns
+    ----------
+    A plot showing the Static Structure Factor with increasing k magnitudes.
+    """
+
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    plt.plot(kMods, ssf_self + ssf_int, color="seagreen", linewidth=1, linestyle='solid', label=r"$\rho$=%.2f, T=%.1f, $\gamma=%.1f$" %(density, md.temperature, md.gamma))
+    
+def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str, graph: bool) -> np.ndarray:
+    """
+    Plot which compares different plots of the Static Structure Factor with means over the iterations.
+
+    Parameters
+    ----------
+    home : srt
+        Directory where all other sub-directories are contained.
+    directoryList : list[str]
+        All subdirectories to consider.
+    title : srt
+        The title of the plot.
+    outputName : str
+        The name of the plot file.
+    graph : bool
+        If true, saves a plot.
+
+    Returns
+    ----------
+    kValues : np.ndarray
+        An array containing the values of k for which SSF is max.
+    """
+
+    highestValue = 0
+    dirCounter = 0
+    kValues = np.zeros(len(directoryList))
+
+    plt.clf()
+    if graph : plt.title(title, fontsize=16)
+    # In the list there should be each super-directory that contributes
+    for directory in directoryList:
+        #print("\n", "Doing directory: ", directory, "\n")
+        
+        ssf_self = None
+        ssf_int = None
+        for root, subdirectories, files in os.walk(directory):
+            subdirectories.sort()
+
+            # Mean between the iterations
+            for subdir in subdirectories:
+                #print("Doing subdirectory: ", subdir)
+
+                loadPath = os.path.join(directory, subdir)
+                evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
+                with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
+                    md = pickle.load(f)
+
+                kMods = np.linspace((2*np.pi/md.box_size[0]), (4*np.pi), 30)
+                ssf_self_temp, ssf_int_temp = compute_ssf(md.allUnwrappedPositions, kMods)
+                if ssf_self is None: 
+                    ssf_self = ssf_self_temp/np.shape(subdirectories)[0]
+                    ssf_int = ssf_int_temp/np.shape(subdirectories)[0]
+                else: 
+                    ssf_self += ssf_self_temp/np.shape(subdirectories)[0]
+                    ssf_int += ssf_int_temp/np.shape(subdirectories)[0]
+
+        highestValue = max(highestValue, np.max(ssf_self + ssf_int))
+        chosenk = np.array([kMods[np.argmax(ssf_self + ssf_int)]])
+        kValues[dirCounter] = chosenk[0]
+        dirCounter += 1
+        if graph : ssfPlotter(kMods, ssf_self, ssf_int, md)
+
+    if graph: 
+        plt.ylabel(r"SSF", fontsize=14)
+        plt.xlabel(r"|k|", fontsize=14)
+        #plt.ylim(bottom=0)
+        plt.axhline(y=1, color="gray", linestyle="--")
+        plt.tight_layout()
+        plt.legend()
+        plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
+
+    return kValues
+
+def isfPlotter(simTime: np.ndarray, isf_self: np.ndarray, isf_int: np.ndarray, md, chosenk: float) -> None:
+    """
+    Plot the input Intermediate Scattering Function with respect to time.
+
+    Parameters
+    ----------
+    kMods : np.ndarray
+        The magnitudes of k values to use.
+    isf_self : np.ndarray
+        ISF array of the self part.
+    isf_int : np.ndarray
+        ISF array of the interacting part.
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+    chosenk : float
+        The value the ISF is computed in.
+
+    Returns
+    ----------
+    A plot showing the time evolution of the Static Structure Factor.
+    """
+
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    eq = md.gamma*md.dt*md.positions_save_freq
+    tvalues = simTime[0:np.shape(isf_self)[0]]
+
+    if md.integrator == 'nve': 
+        if md.interaction == False:
+            popt, pcov = curve_fit(fitFunc_exp, tvalues, isf_self + isf_int, 
+                            maxfev=100000, p0=[1, 2, 1, 0])
+            plt.plot(tvalues, fitFunc_exp(tvalues, popt[0], popt[1], popt[2], popt[3]), 
+                    color="seagreen", linewidth=1, linestyle='solid')
+            plt.plot(tvalues, isf_self + isf_int, 
+                        color="seagreen", marker='o', markersize='3', linestyle='none', fillstyle='none', 
+                        label=r"$N$=%.0f, T=%.0f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(md.num_particles, md.temperature, chosenk, popt[2], popt[1]))
+            #if np.shape(temperatures)[0] > 1: taus[jj, mm] = popt[2]
+        else:
+            plt.plot(tvalues, isf_self + isf_int, 
+                        color="seagreen", marker='o', markersize='3', linestyle='none', fillstyle='none', 
+                        label=r"$\rho$=%.2f, T=%.1f, $|k|=%.1f$" %(density, md.temperature, chosenk))
+    #elif integrator == 'langevin': 
+    else:
+        if md.interaction == False:
+            popt1, pcov1 = curve_fit(fitFunc_exp, simTime[:int(1/eq)], isf_self[:int(1/eq)] + isf_int[:int(1/eq)], 
+                            maxfev=100000, p0=[1, 2, 1, 0]) 
+            plt.plot(simTime[0:int(1/eq)], fitFunc_exp(simTime[:int(1/eq)], popt1[0], popt1[1], popt1[2], popt1[3]), 
+                    color="seagreen", linewidth=1, linestyle='solid')
+            # Diffusive regime
+            #popt2, pcov2 = curve_fit(fitFunc_exp, simTime[int(8/eq):], isf_total[ii, jj, kk, int(8/eq):, mm, 0] + isf_total[ii, jj, kk, int(8/eq):, mm, 1], 
+            #                maxfev=100000, p0=[1, 1, 1, 0]) 
+            #plt.plot(simTime[int(8/eq):], fitFunc_exp(simTime[int(8/eq):], popt2[0], popt2[1], popt2[2], popt2[3]), 
+            #        color=colors[mm], linewidth=1, linestyle='solid', alpha = transparency)
+            plt.plot(tvalues, isf_self + isf_int,
+                    color="seagreen", marker='o', markersize='3', linestyle='none', fillstyle='none', 
+                        label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(md.num_particles, md.temperature, md.gamma, chosenk, popt1[2], popt1[1]))
+            #if np.shape(temperatures)[0] > 1: taus[jj, mm] = popt[2]
+        else:
+            plt.plot(tvalues, isf_self + isf_int,
+                        color="seagreen", marker='o', markersize='3', linestyle='none', fillstyle='none', 
+                        label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$" %(density, md.temperature, md.gamma, chosenk))
+    
+def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title: str, outputName: str) -> None:
+    """
+    Plot which compares different plots of the Intermediate Scattering Function with means over the iterations.
+
+    Parameters
+    ----------
+    home : srt
+        Directory where all other sub-directories are contained.
+    directoryList : list[str]
+        All subdirectories to consider.
+    kValues : np.ndarray
+        The k magnitudes at which to compute the ISF.
+    title : srt
+        The title of the plot.
+    outputName : str
+        The name of the plot file.
+
+    Returns
+    ----------
+    A plot comparing the ISF values for different md objects.
+    """
+
+    highestValue = 0
+    dirCounter = 0
+
+    plt.clf()
+    plt.title(title, fontsize=16)
+    # In the list there should be each super-directory that contributes
+    for directory in directoryList:
+        #print("\n", "Doing directory: ", directory, "\n")
+        
+        isf_self = None
+        isf_int = None
+        for root, subdirectories, files in os.walk(directory):
+            subdirectories.sort()
+
+            # Mean between the iterations
+            for subdir in subdirectories:
+                #print("Doing subdirectory: ", subdir)
+
+                loadPath = os.path.join(directory, subdir)
+                evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
+                with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
+                    md = pickle.load(f)
+
+                isf_self_temp, isf_int_temp = compute_isf(md.allUnwrappedPositions, kValues[dirCounter])
+                if isf_self is None: 
+                    isf_self = isf_self_temp/np.shape(subdirectories)[0]
+                    isf_int = isf_int_temp/np.shape(subdirectories)[0]
+                else: 
+                    isf_self += isf_self_temp/np.shape(subdirectories)[0]
+                    isf_int += isf_int_temp/np.shape(subdirectories)[0]
+
+        highestValue = max(highestValue, np.max(isf_self + isf_int))
+        isfPlotter(evolutionData[:, 0], isf_self, isf_int, md, kValues[dirCounter])
+        dirCounter += 1
+
+    plt.ylabel(r"ISF", fontsize=14)
+    plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
+    #plt.ylim(bottom=0)
+    plt.xscale("log")
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
+
+#--------------------------------------OTHER-GRAPHS-----------------------------------------
+
+def forcesPotential(md, directory: str) -> None:
+    """
+    Plot two graphs: one above of the used potential and one below of the theoretical force
+    compared to the actual forces during the simulation.
+
+    Parameters
+    ----------
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+    directory : str
+        Directory in which to save the plot.
+
+    Returns
+    ----------
+    A plot of the potential and the forces.
+    """
+
+    fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
+    dist = np.linspace(md.sigma*0.9, md.cutoff, 1000)
+    added = np.linspace(md.cutoff, md.cutoff*1.1, 1000)
+    #forces, distances = reduce_vectors(md.forcesContainer, md.distancesContainer, 1e-06)
+    ax[0].axhline(y=0, color="gray", linestyle="--")
+    ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
+    ax[1].axhline(y=0, color="gray", linestyle="--")
+    ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
+    if md.potentialType == "WCA":
+        ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential", color="orchid")
+        ax[0].plot(added, 0*added, color="orchid")
+        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="WCA force", color="orchid")
+        ax[1].plot(added, 0*added, color="orchid")
+    elif md.potentialType == "LJ":
+        ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6), label="LJ potential")
+        ax[0].plot(dist, (4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6)) - (4*md.epsilon*((md.sigma/md.cutoff)**12-(md.sigma/md.cutoff)**6)) + (dist-md.cutoff)*((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ potential")
+        ax[0].plot(added, 0*added, color="orange")
+        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="LJ force")
+        ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6)))-((4*md.epsilon/md.cutoff) * ((12*(md.sigma/md.cutoff)**12)-(6*(md.sigma/md.cutoff)**6))), label="Shifted LJ force")
+        ax[1].plot(added, 0*added, color="orange")
+    ax[0].legend()
+    ax[1].set_ylim(top=100)
+    ax[1].scatter(md.distancesContainer, md.forcesContainer, color="lime", s=1, label="All forces")
+    ax[1].legend()
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0)
+    plt.savefig(directory + "/potential.png", transparent=False, format="png")
+
+def forces(md, directory: str) -> None:
+    """
+    Plot all the forces zoomed around cutoff.
+
+    Parameters
+    ----------
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+    directory : str
+        Directory in which to save the plot.
+
+    Returns
+    ----------
+    A plot of all the zoomed forces around cutoff.
+    """
+
+    plt.clf()
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.axvline(x=md.cutoff, color="gray", linestyle="--")
+    plt.scatter(md.distancesContainer, md.forcesContainer, color="orchid", s=4, label="Zoomed forces (all pairs)")
+    plt.legend()
+    plt.savefig(directory + "/continuous.png", transparent=False, format="png")
+
+def sampleForces(md, directory: str) -> None:
+    """
+    Plot the forces of a sampled pair zoomed around cutoff.
+
+    Parameters
+    ----------
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+    directory : str
+        Directory in which to save the plot.
+
+    Returns
+    ----------
+    A plot of the zoomed forces  of a sampled pair around cutoff.
+    """
+
+    plt.clf()
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.plot(md.allforcesContainer, color="orchid", label="Zoomed forces over time (sampled pair)")
+    plt.ylim(top=0.01, bottom=-0.001)
+    plt.legend()
+    plt.savefig(directory + "/continuous2.png", transparent=False, format="png")
+
+#------------------------------------WORK-IN-PROGRESS---------------------------------------

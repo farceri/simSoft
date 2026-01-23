@@ -4,11 +4,9 @@ mdClasses
 Here are contained the used classes to simulate molecular dynamics, mainly,
 the class MolecularDynamics.
 """
-
 import os
 import numpy as np
 from mdFunctions import *
-
 directory = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
 
 class MolecularDynamics:
@@ -66,8 +64,8 @@ class MolecularDynamics:
         self.potentialEnergy = 0
         # Neighbours list
         self.neighbours = [] 
-        self.skin = 0.3 * self.sigma # Skin for the disk neighbours
-        self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin))) # Cell division for cell neighbours
+        self.skin = 0.3 * self.sigma 
+        self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin))) 
         # Positions
         if initialConf:
             # Take the existing saved configuration
@@ -85,28 +83,27 @@ class MolecularDynamics:
             positions = positions - (self.box_size[0]/2)*np.ones_like(positions)
             positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
             self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
-        self.initial_positions = np.copy(self.positions) #!!! AFTER PUTTING MSD/ISF COMPUTATION OUTSIDE I CAN REMOVE THIS
+
         self.neighborCheckPositions = np.copy(self.positions)
         self.unwrappedPositions = np.copy(self.positions)
         self.allPositions = []
         self.allUnwrappedPositions = []
-        # Velocities
-        self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
-        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
-        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
+        # Velocities (Maxwell-Boltzmann without center of mass and scaled to correct initial temperature)
+        self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) 
+        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) 
+        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
         self.tau = self.dt
         self.activity = np.sqrt(2 * self.temperature * self.kB / (self.gamma * self.tau))
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
-
+        # Other checks
         self.forcesContainer = []
         self.allforcesContainer = []
         self.distancesContainer = []
         self.positions_save_freq = 1000
-        self.chosenk = 0
-        self.iter = 0
 
+        # Print the class instance
         print(self)
 
     def __str__(self):
@@ -117,17 +114,16 @@ class MolecularDynamics:
             f"Number of particles: {self.num_particles:d}\n"
             f"Temperature: {self.temperature:.1f}\n"
             f"Friction: {self.gamma:.1f}\n"
-            f"Time step: {self.dt:.4f}\n"
             f"Time step: {self.dt:.4f}\nBox size: Lx {self.box_size[0]:.1f} and Ly {self.box_size[1]:.1f}\n"
             f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
         )
 
     def apply_pbc(self):
-        """Apply periodic boundary conditions to keep particles inside the simulation box."""
+        """Apply Periodic Boundary Conditions to keep particles inside the simulation box."""
         self.positions = (self.positions + self.box_size / 2) % self.box_size - self.box_size / 2
 
     def compute_cell_neighbours(self):
-        """"Computing nearest neighbours based on cell subdivision."""
+        """"Computes nearest neighbours based on cell subdivision."""
 
         self.neighbours = [] # Reset neighbours
         head = -np.ones((self.cellDivision, self.cellDivision), dtype=int)
@@ -166,7 +162,7 @@ class MolecularDynamics:
         self.neighborCheckPositions = self.positions
 
     def compute_disk_neighbours(self):
-        """"Computing nearest neighbours based on simple disk distance."""
+        """"Computies nearest neighbours based on disk distance."""
 
         self.neighbours = [] # Reset neighbours
 
@@ -240,7 +236,7 @@ class MolecularDynamics:
         self.potentialEnergy = np.sum(potential_energy)
 
     def langevin_force(self):
-        """Compute stochastic white noise and friction forces."""
+        """Compute stochastic White Noise and friction forces."""
         noise = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.dt) * np.random.randn(self.num_particles, 2)
         return -self.gamma * self.velocities + noise
 
@@ -273,7 +269,7 @@ class MolecularDynamics:
         self.velocities += 0.5 * self.forces / self.mass * self.dt
 
     def euler_maruyama(self):
-        """Euler-Maruyama integration for active brownian particles."""
+        """Euler-Maruyama integration for Active Brownian particles with Colored Noise."""
         if self.interaction:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
@@ -291,82 +287,5 @@ class MolecularDynamics:
         return kinetic_energy / self.num_particles
     
     def compute_kineticenergy(self):
+        """Compute the kinetic energy of the system."""
         return (0.5 * self.mass * np.sum(self.velocities ** 2))
-
-    def compute_msd(self):
-        displacement = self.unwrappedPositions - self.initial_positions
-        msd = np.mean(np.sum(displacement ** 2, axis=1))
-        return msd
-
-    def compute_ssf(self, inf_lim, sup_lim, doCycle):
-        "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
-
-        angles = np.arange(0, 2*np.pi, np.pi/4)
-        ssf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
-        mask = ~np.eye(self.num_particles, dtype=bool)
-        ssf_total_self = np.ones((np.shape(self.kmods)[0]), dtype=complex)
-        ssf_total_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
-
-        # Finding the maximum with the static structure factor
-        if self.iter == 0 or doCycle:
-            for t0 in range(inf_lim, sup_lim): 
-                #print("Doing", t0) 
-                ssf_int = np.zeros_like(ssf_int) 
-                for ii, kMod in enumerate(self.kmods): 
-                    for angle in angles: 
-                        kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle))) 
-                        delta = self.allUnwrappedPositions[t0][:, None, :] - self.allUnwrappedPositions[t0] [None, :, :] 
-                        #delta -= self.box_size[0] * np.round(delta / self.box_size[0])
-                        delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1) 
-                        ssf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles) 
-                    ssf_total_int[ii] += (ssf_int[ii]) / (np.shape(angles)[0])
-            
-            ssf_total_int /= (sup_lim - inf_lim)
-            ssf_total_self = np.real(ssf_total_self)
-            ssf_total_int = np.real(ssf_total_int)
-
-        if self.iter == 0 and (not doCycle): 
-            self.kmods = np.array([self.kmods[np.argmax(ssf_total_self[:] + ssf_total_int[:])]])
-            self.chosenk = self.kmods[0]
-        elif self.iter != 0 and (not doCycle):
-            self.kmods = np.array([self.chosenk])
-
-        if doCycle:
-            return ssf_total_self, ssf_total_int
-
-    def compute_isf(self, inf_lim, sup_lim):
-        "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
-
-        angles = np.arange(0, 2*np.pi, np.pi/4)
-        mask = ~np.eye(self.num_particles, dtype=bool)
-
-        isf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
-        isf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
-        isf_total_self = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
-        isf_total_int = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
-
-        for t0 in range(inf_lim, sup_lim):
-            #print("Doing", t0)
-            temporary_ip = self.allUnwrappedPositions[t0]
-            for t in range(t0, sup_lim):
-                isf_self = np.zeros_like(isf_self)
-                isf_int = np.zeros_like(isf_int)
-                for ii, kMod in enumerate(np.atleast_1d(self.chosenk)):
-                    for angle in angles:
-                        kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle)))
-                        isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.allUnwrappedPositions[t] - temporary_ip), kVec)))/(self.num_particles * np.shape(angles)[0])
-                        delta = self.allUnwrappedPositions[t][:, None, :] - temporary_ip[None, :, :]  
-                        delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1)
-                        isf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
-                        # isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.allUnwrappedPositions[t][ :, None, :] - temporary_ip[None, :, :]), kVec)))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
-                isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
-                isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
-
-        if (np.any(np.abs(np.imag(isf_total_self)) > 1e-4) or np.any(np.abs(np.imag(isf_total_int))  > 1e-4)):
-            print("The imaginary part is absolutely too big.")
-
-        isf_total_self = np.real(isf_total_self)
-        isf_total_int = np.real(isf_total_int)
-        
-        return isf_total_self, isf_total_int
-    
