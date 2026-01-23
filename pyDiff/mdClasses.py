@@ -1,0 +1,372 @@
+"""
+mdClasses 
+----------
+Here are contained the used classes to simulate molecular dynamics, mainly,
+the class MolecularDynamics.
+"""
+
+import os
+import numpy as np
+from mdFunctions import *
+
+directory = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
+
+class MolecularDynamics:
+
+    def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
+                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False):
+        """
+        This class implements a series of methods to simulate molecular dynamics with different potential types and
+        different algorithms in 2D.
+
+        Parameters
+        ----------
+        num_particles : int
+            Number of particles of the system, default is 100.
+        temperature : float
+            Temperature of the system, default is 1.0.
+        gamma : float
+            Friction of the system, default is 1.0.
+        potentialType : str
+            What potential to use. Options are "WCA" and "LJ", default is "WCA".
+        integrator : str
+            The integrator used for the object. Options are 'nve', 'langevin and 'em', default is 'nve'.
+        dt : float
+            Timestep of the simulation, default id 0.0001.
+        Lx, Ly : int
+            Dimensions of the 2D box.
+        initialConf : bool
+            If True, loads an existing configuration. Default is False.
+        interaction : bool
+            If True, there is interaction. Default is False.
+        """
+
+        # Variables set to specific values
+        self.mass = 1.0
+        self.kB = 1.0 
+        self.sigma = 1.0 
+        self.epsilon = 1.0
+
+        # Initialization from input
+        self.num_particles = num_particles
+        self.dt = dt
+        self.gamma = gamma 
+        self.temperature = temperature
+        self.box_size = np.array([Lx, Ly])
+        self.interaction = interaction
+        self.potentialType = potentialType
+        self.integrator = integrator
+
+        # Potential
+        if self.potentialType == "WCA":
+            self.cutoff = (2**(1/6))*self.sigma 
+        elif self.potentialType == "LJ":
+            self.cutoff = 3.0 
+        self.forces = np.zeros((num_particles, 2))
+        self.potentialEnergy = 0
+        # Neighbours list
+        self.neighbours = [] 
+        self.skin = 0.3 * self.sigma # Skin for the disk neighbours
+        self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin))) # Cell division for cell neighbours
+        # Positions
+        if initialConf:
+            # Take the existing saved configuration
+            data = np.loadtxt(directory + os.sep + 'md_conf.dat')
+            self.positions = data[:, :2]
+            #self.velocities = data[:, 2:]
+        else:
+            # Initialize positions in a grid 
+            nSide = int(np.ceil(np.sqrt(self.num_particles)))
+            # Create grid positions
+            x = (np.arange(nSide) + 0.5) * (self.box_size[0]/nSide) - (self.box_size[0]/nSide)/2
+            y = (np.arange(nSide) + 0.5) * (self.box_size[1]/nSide) - (self.box_size[1]/nSide)/2
+            xv, yv = np.meshgrid(x, y)
+            positions = np.vstack([xv.ravel(), yv.ravel()]).T
+            positions = positions - (self.box_size[0]/2)*np.ones_like(positions)
+            positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
+            self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
+        self.initial_positions = np.copy(self.positions) #!!! AFTER PUTTING MSD/ISF COMPUTATION OUTSIDE I CAN REMOVE THIS
+        self.neighborCheckPositions = np.copy(self.positions)
+        self.unwrappedPositions = np.copy(self.positions)
+        self.allPositions = []
+        self.allUnwrappedPositions = []
+        # Velocities
+        self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) # Maxwell-Boltmann
+        self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) # Remove center of mass
+        self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) # Scale to have initial temperature
+        #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
+        # Activity variables
+        self.tau = self.dt
+        self.activity = np.sqrt(2 * self.temperature * self.kB / (self.gamma * self.tau))
+        self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
+
+        self.forcesContainer = []
+        self.allforcesContainer = []
+        self.distancesContainer = []
+        self.positions_save_freq = 1000
+        self.chosenk = 0
+        self.iter = 0
+
+        print(self)
+
+    def __str__(self):
+        """Print the class variables."""
+        return (
+            f"{'='*50}\n"
+            f"Created md object with settings:\n"
+            f"Number of particles: {self.num_particles:d}\n"
+            f"Temperature: {self.temperature:.1f}\n"
+            f"Friction: {self.gamma:.1f}\n"
+            f"Time step: {self.dt:.4f}\n"
+            f"Time step: {self.dt:.4f}\nBox size: Lx {self.box_size[0]:.1f} and Ly {self.box_size[1]:.1f}\n"
+            f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
+        )
+
+    def apply_pbc(self):
+        """Apply periodic boundary conditions to keep particles inside the simulation box."""
+        self.positions = (self.positions + self.box_size / 2) % self.box_size - self.box_size / 2
+
+    def compute_cell_neighbours(self):
+        """"Computing nearest neighbours based on cell subdivision."""
+
+        self.neighbours = [] # Reset neighbours
+        head = -np.ones((self.cellDivision, self.cellDivision), dtype=int)
+        cell = np.zeros((self.num_particles, 2), dtype=int)
+        list = np.zeros(self.num_particles, dtype=int)
+        near_cells = [(1, 1), (1, 0), (1, -1), (0, 1)]
+        other_cell = [0, 0]
+
+        for ii in range(self.num_particles):
+            cell[ii, :] = np.floor(((self.positions[ii, :] + 5)*self.cellDivision)/(self.box_size[0])) # which cell ii belongs to
+            list[ii] = head[cell[ii, 0], cell[ii, 1]] # point ii to previous head of the cell, 0 if it is first in cell
+            head[cell[ii, 0], cell[ii, 1]] = ii # ii is now the new head of the cell
+
+        for ii in range(self.num_particles):
+            ii_list = []
+            current_cell = (cell[ii, 0], cell[ii, 1])
+            current_head = head[cell[ii, 0], cell[ii, 1]]
+
+            # Neighbours in current cell
+            while current_head != -1: # if there are other neighbours and the cell wasn't checked...
+                if current_head > ii: # ...and it's not yourself (and no double count)
+                    ii_list.append(current_head) # append neighbour
+                current_head = list[current_head] # next head in line
+
+            # Neighbours in near cells
+            for value in near_cells:
+                other_cell[0] = current_cell[0] + value[0]
+                other_cell[1] = current_cell[1] + value[1]
+                other_head = head[other_cell[0]%self.cellDivision, other_cell[1]%self.cellDivision]
+                while other_head != -1: # if there are other neighbours...
+                    ii_list.append(other_head) # append neighbour
+                    other_head = list[other_head] # next head in line
+                    
+            self.neighbours.append(ii_list.copy())
+        
+        self.neighborCheckPositions = self.positions
+
+    def compute_disk_neighbours(self):
+        """"Computing nearest neighbours based on simple disk distance."""
+
+        self.neighbours = [] # Reset neighbours
+
+        for ii in range(self.num_particles):
+                ii_list = []
+                for jj in range(ii+1, self.num_particles):
+                    distances = self.positions[ii] - self.positions[jj]
+                    distances = distances - (np.round(distances/self.box_size)) * self.box_size
+                    distance = np.sqrt(np.sum(distances**2))
+                    if distance <= self.cutoff + self.skin:
+                        ii_list.append(jj)
+                
+                self.neighbours.append(ii_list.copy())
+
+        self.neighborCheckPositions = self.positions
+
+    def compute_LJ_forces(self):
+        """Shifted forces using LJ potential."""
+        
+        forceShift = (4*self.epsilon/self.cutoff) * ((12*(self.sigma/self.cutoff)**12)-(6*(self.sigma/self.cutoff)**6))
+        potShift = 4 * self.epsilon * ((self.sigma/self.cutoff)**12-(self.sigma/self.cutoff)**6)
+        potDerShift = (- 4 * self.epsilon * (12*((self.sigma/self.cutoff)**12)-6*((self.sigma/self.cutoff)**6))) / self.cutoff
+        self.forces = np.zeros((self.num_particles, 2))  # Reset forces
+        potential_energy = 0  # Reset potential
+        for ii in range(self.num_particles):
+            for jj in self.neighbours[ii]:
+            #for jj in range(ii + 1, self.num_particles):
+                distances = self.positions[ii] - self.positions[jj]
+                distances = distances - (np.round(distances/self.box_size)) * self.box_size
+                distance = np.sqrt(np.sum(distances**2))
+                if distance < self.cutoff:
+                    potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - potShift - ((distance - self.cutoff)*potDerShift))
+                    LJforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) - forceShift
+                    self.forces[ii] = self.forces[ii] + ((distances/distance) * LJforce)
+                    self.forces[jj] = self.forces[jj] - ((distances/distance) * LJforce)
+                    #self.forcesContainer.append(LJforce)
+                    #self.distancesContainer.append(distance)
+
+        self.potentialEnergy = potential_energy
+
+    def compute_WCA_forces(self):
+        """Forces using WCA potential."""
+        
+        self.forces = np.zeros((self.num_particles, 2))  # Reset forces
+        potential_energy = np.zeros(self.num_particles)  # Reset potential
+        for ii in range(self.num_particles):
+            for jj in self.neighbours[ii]:
+            #for jj in range(ii + 1, self.num_particles):
+                distances = self.positions[ii] - self.positions[jj]
+                distances -= np.round(distances/self.box_size) * self.box_size
+                distance = np.linalg.norm(distances)
+                WCAforce = 0
+                ratio6 = (self.sigma / distance)**6
+                ratio12 = ratio6 * ratio6
+                if distance < self.cutoff:
+                    # 0.5 for distributing the energy in the two particles
+                    potential_energy[ii] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
+                    potential_energy[jj] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
+                    #potential_energy[ii] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
+                    #potential_energy[jj] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
+                    #WCAforce = (4 * self.epsilon / distance) * (12 * (self.sigma/distance)**12 - 6 * (self.sigma/distance)**6)
+                    WCAforce = 24 * self.epsilon * (2 * ratio12 - ratio6) / distance 
+                    self.forces[ii] += WCAforce * distances / distance
+                    self.forces[jj] -= WCAforce * distances / distance
+                #if (ii==2) and (jj==5):
+                #    self.allforcesContainer.append(WCAforce)
+                #if abs(distance - self.cutoff) < 0.01:
+                #    self.forcesContainer.append(WCAforce)
+                #    self.distancesContainer.append(distance)
+
+        self.potentialEnergy = np.sum(potential_energy)
+
+    def langevin_force(self):
+        """Compute stochastic white noise and friction forces."""
+        noise = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.dt) * np.random.randn(self.num_particles, 2)
+        return -self.gamma * self.velocities + noise
+
+    def velocity_verlet_nve(self):
+        """Velocity Verlet integration for NVE dynamics."""
+        self.velocities += 0.5 * self.forces / self.mass * self.dt
+        self.positions += self.velocities * self.dt
+        self.unwrappedPositions += self.velocities * self.dt
+        self.apply_pbc()
+        if self.interaction:
+            if self.potentialType == "WCA":
+                self.compute_WCA_forces()
+            elif self.potentialType == "LJ":
+                self.compute_LJ_forces()
+        self.velocities += 0.5 * self.forces / self.mass * self.dt
+
+    def velocity_verlet_langevin(self):
+        """Velocity Verlet integration for Langevin dynamics."""
+        self.velocities += 0.5 * self.forces / self.mass * self.dt
+        self.positions += self.velocities * self.dt
+        self.unwrappedPositions += self.velocities * self.dt
+        self.apply_pbc()
+        if self.interaction:
+            if self.potentialType == "WCA":
+                self.compute_WCA_forces()
+            elif self.potentialType == "LJ":
+                self.compute_LJ_forces()
+        else : self.forces = np.zeros((self.num_particles, 2))
+        self.forces += self.langevin_force()
+        self.velocities += 0.5 * self.forces / self.mass * self.dt
+
+    def euler_maruyama(self):
+        """Euler-Maruyama integration for active brownian particles."""
+        if self.interaction:
+            if self.potentialType == "WCA":
+                self.compute_WCA_forces()
+            elif self.potentialType == "LJ":
+                self.compute_LJ_forces()   
+        self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
+        directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
+        self.positions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+        self.apply_pbc()
+        self.unwrappedPositions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+
+    def compute_temperature(self):
+        """Compute the temperature of the system from the kinetic energy."""
+        kinetic_energy = 0.5 * self.mass * np.sum(self.velocities ** 2)
+        return kinetic_energy / self.num_particles
+    
+    def compute_kineticenergy(self):
+        return (0.5 * self.mass * np.sum(self.velocities ** 2))
+
+    def compute_msd(self):
+        displacement = self.unwrappedPositions - self.initial_positions
+        msd = np.mean(np.sum(displacement ** 2, axis=1))
+        return msd
+
+    def compute_ssf(self, inf_lim, sup_lim, doCycle):
+        "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
+
+        angles = np.arange(0, 2*np.pi, np.pi/4)
+        ssf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+        mask = ~np.eye(self.num_particles, dtype=bool)
+        ssf_total_self = np.ones((np.shape(self.kmods)[0]), dtype=complex)
+        ssf_total_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+
+        # Finding the maximum with the static structure factor
+        if self.iter == 0 or doCycle:
+            for t0 in range(inf_lim, sup_lim): 
+                #print("Doing", t0) 
+                ssf_int = np.zeros_like(ssf_int) 
+                for ii, kMod in enumerate(self.kmods): 
+                    for angle in angles: 
+                        kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle))) 
+                        delta = self.allUnwrappedPositions[t0][:, None, :] - self.allUnwrappedPositions[t0] [None, :, :] 
+                        #delta -= self.box_size[0] * np.round(delta / self.box_size[0])
+                        delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1) 
+                        ssf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles) 
+                    ssf_total_int[ii] += (ssf_int[ii]) / (np.shape(angles)[0])
+            
+            ssf_total_int /= (sup_lim - inf_lim)
+            ssf_total_self = np.real(ssf_total_self)
+            ssf_total_int = np.real(ssf_total_int)
+
+        if self.iter == 0 and (not doCycle): 
+            self.kmods = np.array([self.kmods[np.argmax(ssf_total_self[:] + ssf_total_int[:])]])
+            self.chosenk = self.kmods[0]
+        elif self.iter != 0 and (not doCycle):
+            self.kmods = np.array([self.chosenk])
+
+        if doCycle:
+            return ssf_total_self, ssf_total_int
+
+    def compute_isf(self, inf_lim, sup_lim):
+        "Compute the Intermediate Scattering Function for different k modulus with mean over different t0."
+
+        angles = np.arange(0, 2*np.pi, np.pi/4)
+        mask = ~np.eye(self.num_particles, dtype=bool)
+
+        isf_self = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+        isf_int = np.zeros((np.shape(self.kmods)[0]), dtype=complex)
+        isf_total_self = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
+        isf_total_int = np.zeros((sup_lim, (np.shape(self.kmods)[0])), dtype=complex)
+
+        for t0 in range(inf_lim, sup_lim):
+            #print("Doing", t0)
+            temporary_ip = self.allUnwrappedPositions[t0]
+            for t in range(t0, sup_lim):
+                isf_self = np.zeros_like(isf_self)
+                isf_int = np.zeros_like(isf_int)
+                for ii, kMod in enumerate(np.atleast_1d(self.chosenk)):
+                    for angle in angles:
+                        kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle)))
+                        isf_self[ii] += np.sum(np.exp(1j * np.matmul((self.allUnwrappedPositions[t] - temporary_ip), kVec)))/(self.num_particles * np.shape(angles)[0])
+                        delta = self.allUnwrappedPositions[t][:, None, :] - temporary_ip[None, :, :]  
+                        delta = delta[mask].reshape(self.num_particles, self.num_particles-1, -1)
+                        isf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
+                        # isf_int[ii] += np.sum(np.exp(1j * np.matmul((self.allUnwrappedPositions[t][ :, None, :] - temporary_ip[None, :, :]), kVec)))/(self.num_particles*(self.num_particles-1) * np.shape(angles)[0])
+                isf_total_self[t-t0, :] += (isf_self) / ((sup_lim - inf_lim) - (t-t0))
+                isf_total_int[t-t0, :] += (isf_int) / ((sup_lim - inf_lim) - (t-t0))
+
+        if (np.any(np.abs(np.imag(isf_total_self)) > 1e-4) or np.any(np.abs(np.imag(isf_total_int))  > 1e-4)):
+            print("The imaginary part is absolutely too big.")
+
+        isf_total_self = np.real(isf_total_self)
+        isf_total_int = np.real(isf_total_int)
+        
+        return isf_total_self, isf_total_int
+    
