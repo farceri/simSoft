@@ -6,25 +6,26 @@ home = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
 if __name__ == '__main__':
     
     start = time.time()
-    temperature = 1.0
-    gamma = 1.0
+
+    particles = np.array([20, 70], dtype=int)
+    temperatures = np.array([1.0], dtype=float)
+    frictions = np.array([1.0], dtype=float)
     dt = 0.0001
     integrator = 'nve'
+    interaction = 'WCA'
+    directoryList = []
 
-    num_particles = 10
-    optionsDirectory1 = home + os.sep + f"{integrator}WCA_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}" 
-    num_particles = 70
-    optionsDirectory2 = home + os.sep + f"{integrator}WCA_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}" 
+    for ii, num_particles in enumerate(particles):
+        for jj, temperature in enumerate(temperatures):
+            for kk, gamma in enumerate(frictions):
+                
+                optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}" 
+                directoryList.append(optionsDirectory)
 
-    directoryList = {optionsDirectory1, optionsDirectory2}
-
-    msdTotality(home, directoryList, title = "MSD", outputName = "msd")
-    kValues = ssfTotality(home, directoryList, title = "SSF", outputName = "ssf", graph = True)
-    isfTotality(home, directoryList, kValues, title = "ISF", outputName = "isf")
+    msdTotality(home, directoryList, title = "MSD with different densities", outputName = "msd")
+    kValues = ssfTotality(home, directoryList, title = "SSF with different densities", outputName = "ssf", graph = True)
+    taus = isfTotality(home, directoryList, kValues, title = "ISF with different densities", outputName = "isf")
+    #tauPlotter(home, r"$\tau$ with increasing $T$", "tau", temperatures, taus, "seagreen")
+    cvvTotality(home, directoryList, title = "CVV with different densities", outputName = "cvv")
 
     print("It took %fs" %(time.time()-start))
-
-# TODOS
-# Implementation of taus
-# Update load_data in class
-# Remove the initial assignment of positions in the class for all_

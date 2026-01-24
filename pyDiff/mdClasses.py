@@ -7,7 +7,7 @@ the class MolecularDynamics.
 import os
 import numpy as np
 from mdFunctions import *
-directory = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
+home = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
 
 class MolecularDynamics:
 
@@ -68,9 +68,13 @@ class MolecularDynamics:
         self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin))) 
         # Positions
         if initialConf:
-            # Take the existing saved configuration
-            data = np.loadtxt(directory + os.sep + 'md_conf.dat')
-            self.positions = data[:, :2]
+            # Take the existing saved configuration from the first iteration
+            if self.interaction : optionsDirectory = f"{self.integrator}WCA_N{self.num_particles:d}_T{self.temperature:.1f}_gamma{self.gamma:.2f}"
+            else : optionsDirectory = f"{integrator}FREE_N{self.num_particles:d}_T{self.temperature:.1f}_gamma{self.gamma:.2f}"
+            iterationDirectory = f"iteration{1}"
+            savePath = os.path.join(home, optionsDirectory, iterationDirectory)
+            data = np.load(savePath + os.sep + 'lastConfiguration.npz')
+            self.positions = data["positions"]
             #self.velocities = data[:, 2:]
         else:
             # Initialize positions in a grid 
@@ -88,6 +92,7 @@ class MolecularDynamics:
         self.unwrappedPositions = np.copy(self.positions)
         self.allPositions = []
         self.allUnwrappedPositions = []
+        self.allVelocities = []
         # Velocities (Maxwell-Boltzmann without center of mass and scaled to correct initial temperature)
         self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) 
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) 
@@ -95,7 +100,7 @@ class MolecularDynamics:
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
         self.tau = self.dt
-        self.activity = np.sqrt(2 * self.temperature * self.kB / (self.gamma * self.tau))
+        self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
         # Other checks
         self.forcesContainer = []
@@ -277,9 +282,9 @@ class MolecularDynamics:
                 self.compute_LJ_forces()   
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
         directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
-        self.positions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+        self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce /self.gamma) * directions * self.dt
         self.apply_pbc()
-        self.unwrappedPositions += self.forces / self.gamma * self.dt + self.activity * directions * self.dt
+        self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce /self.gamma) * directions * self.dt
 
     def compute_temperature(self):
         """Compute the temperature of the system from the kinetic energy."""

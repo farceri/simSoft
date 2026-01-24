@@ -29,13 +29,17 @@ if __name__ == '__main__':
     potentialType = 'WCA' # Options are LJ and WCA
 
     # Control the parameters 
-    particles = np.array([70], dtype=int)
+    particles = np.array([20, 70], dtype=int)
     temperatures = np.array([1.0], dtype=float)
     frictions = np.array([1.0], dtype=float)
 
     for ii, num_particles in enumerate(particles):
         for jj, temperature in enumerate(temperatures):
             for kk, gamma in enumerate(frictions):
+
+                # Create the path to save the data
+                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}"
+                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}"
 
                 for iteration in range(iterations):
 
@@ -72,6 +76,7 @@ if __name__ == '__main__':
                     md.unwrappedPositions = md.positions.copy()
                     md.allPositions.append(md.positions.copy())
                     md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
+                    md.allVelocities.append(md.velocities.copy())
                     for step in range(num_steps + save_freq):
                         distances = md.positions - md.neighborCheckPositions
                         distances -= np.round(distances/md.box_size) * md.box_size
@@ -92,12 +97,10 @@ if __name__ == '__main__':
                         if step % md.positions_save_freq == 0:
                             md.allPositions.append(md.positions.copy())
                             md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
+                            md.allVelocities.append(md.velocities.copy())
                         if step % print_freq == 0:
                             print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
 
-                    # Create the path to save the data
-                    if interaction : optionsDirectory = f"{integrator}WCA_N{md.num_particles:d}_T{md.temperature:.1f}_gamma{md.gamma:.2f}"
-                    else : optionsDirectory = f"{integrator}FREE_N{md.num_particles:d}_T{md.temperature:.1f}_gamma{md.gamma:.2f}"
                     iterationDirectory = f"iteration{iteration+1}"
                     savePath = os.path.join(directory, optionsDirectory, iterationDirectory)
                     os.makedirs(savePath, exist_ok=True)
@@ -107,6 +110,7 @@ if __name__ == '__main__':
                     # Save time, temperature, potential and kinetic energy
                     simTime = np.arange(0, num_steps + save_freq, save_freq) * md.dt 
                     np.savetxt(savePath + os.sep + 'evolutionData.dat', np.column_stack((simTime, temp, potential, kinetic)))
+                    np.savez(os.path.join(savePath, "lastConfiguration.npz"), positions = md.positions, velocities = md.velocities)
 
                 # Plot in a gif the particles moving
                 if compute_gif: 
