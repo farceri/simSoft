@@ -6,9 +6,31 @@ the class MolecularDynamics.
 """
 import os
 import numpy as np
+import numba as nb
 from mdFunctions import *
 home = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
 
+# FA: TODO
+@nb.njit(parallel=True, fastmath=True)
+def compute_WCA_forces_numba(positions, energy, neighbours, neighbor_counts, box_size, sigma, epsilon, cutoff):
+    num_particles = positions.shape[0]
+    forces = np.zeros((num_particles, 2))
+    energy = np.zeros(num_particles)  # Reset potential
+
+    for ii in nb.prange(num_particles):
+        for k in range(neighbor_counts[ii]):
+            jj = neighbours[ii, k]
+            distances = positions[ii] - positions[jj]
+            distances -= np.round(distances/box_size) * box_size
+            distance = np.linalg.norm(distances)
+            if distance < cutoff:
+                ratio6 = (sigma / distance)**6
+                ratio12 = ratio6 * ratio6
+                energy[ii] += 0.5 * epsilon * (4 * (ratio12 - ratio6) + 1)
+                WCAforce = 24 * epsilon * (2 * ratio12 - ratio6) / distance 
+                forces[ii] += WCAforce * distances / distance
+
+    return forces, energy
 class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
@@ -61,6 +83,7 @@ class MolecularDynamics:
         elif self.potentialType == "LJ":
             self.cutoff = 3.0 
         self.forces = np.zeros((num_particles, 2))
+        self.energy = np.zeros(num_particles) # FA: per-perticle potential energy array
         self.potentialEnergy = 0
         # Neighbours list
         self.neighbours = [] 
@@ -97,7 +120,7 @@ class MolecularDynamics:
         self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) 
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) 
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
-        #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
+        print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
         self.tau = self.dt
         self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
@@ -131,6 +154,7 @@ class MolecularDynamics:
         """"Computes nearest neighbours based on cell subdivision."""
 
         self.neighbours = [] # Reset neighbours
+        self.neighbour_counts = []
         head = -np.ones((self.cellDivision, self.cellDivision), dtype=int)
         cell = np.zeros((self.num_particles, 2), dtype=int)
         list = np.zeros(self.num_particles, dtype=int)
@@ -163,6 +187,7 @@ class MolecularDynamics:
                     other_head = list[other_head] # next head in line
                     
             self.neighbours.append(ii_list.copy())
+            self.neighbour_counts.append(len(ii_list))
         
         self.neighborCheckPositions = self.positions
 
@@ -170,6 +195,7 @@ class MolecularDynamics:
         """"Computies nearest neighbours based on disk distance."""
 
         self.neighbours = [] # Reset neighbours
+        self.neighbour_counts = []
 
         for ii in range(self.num_particles):
                 ii_list = []
@@ -181,6 +207,7 @@ class MolecularDynamics:
                         ii_list.append(jj)
                 
                 self.neighbours.append(ii_list.copy())
+                self.neighbour_counts.append(len(ii_list))
 
         self.neighborCheckPositions = self.positions
 
@@ -201,13 +228,14 @@ class MolecularDynamics:
                 if distance < self.cutoff:
                     potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - potShift - ((distance - self.cutoff)*potDerShift))
                     LJforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) - forceShift
-                    self.forces[ii] = self.forces[ii] + ((distances/distance) * LJforce)
-                    self.forces[jj] = self.forces[jj] - ((distances/distance) * LJforce)
+                    self.forces[ii] += ((distances/distance) * LJforce)
+                    self.forces[jj] -= ((distances/distance) * LJforce)
                     #self.forcesContainer.append(LJforce)
                     #self.distancesContainer.append(distance)
 
         self.potentialEnergy = potential_energy
 
+    # FA: REMOVED UPDATE OF JJTH PARTICLE TO USE PARALLEL COMPUTATION
     def compute_WCA_forces(self):
         """Forces using WCA potential."""
         
@@ -219,10 +247,10 @@ class MolecularDynamics:
                 distances = self.positions[ii] - self.positions[jj]
                 distances -= np.round(distances/self.box_size) * self.box_size
                 distance = np.linalg.norm(distances)
-                WCAforce = 0
-                ratio6 = (self.sigma / distance)**6
-                ratio12 = ratio6 * ratio6
                 if distance < self.cutoff:
+                    # FA: moved ratio6 and ratio12 inside the if condition so they are computed only if necessary
+                    ratio6 = (self.sigma / distance)**6
+                    ratio12 = ratio6 * ratio6
                     # 0.5 for distributing the energy in the two particles
                     potential_energy[ii] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
                     potential_energy[jj] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
@@ -237,7 +265,6 @@ class MolecularDynamics:
                 #if abs(distance - self.cutoff) < 0.01:
                 #    self.forcesContainer.append(WCAforce)
                 #    self.distancesContainer.append(distance)
-
         self.potentialEnergy = np.sum(potential_energy)
 
     def langevin_force(self):
@@ -254,6 +281,9 @@ class MolecularDynamics:
         if self.interaction:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
+            elif self.potentialType == "WCAnumba":
+                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.neighbours, self.neighbour_counts, 
+                                                                         self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()
         self.velocities += 0.5 * self.forces / self.mass * self.dt
@@ -267,6 +297,9 @@ class MolecularDynamics:
         if self.interaction:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
+            elif self.potentialType == "WCAnumba":
+                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.energy, self.neighbours, self.neighbour_counts, 
+                                                                         self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()
         else : self.forces = np.zeros((self.num_particles, 2))
@@ -278,6 +311,9 @@ class MolecularDynamics:
         if self.interaction:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
+            elif self.potentialType == "WCAnumba":
+                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.energy, self.neighbours, self.neighbour_counts, 
+                                                                         self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()   
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
@@ -285,6 +321,13 @@ class MolecularDynamics:
         self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce /self.gamma) * directions * self.dt
         self.apply_pbc()
         self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce /self.gamma) * directions * self.dt
+
+    def compute_potentialenergy(self):
+        """Compute the potential energy of the system."""
+        if self.potentialType == "WCAnumba":
+            return np.sum(self.energy)
+        else:
+            return self.potentialEnergy
 
     def compute_temperature(self):
         """Compute the temperature of the system from the kinetic energy."""
