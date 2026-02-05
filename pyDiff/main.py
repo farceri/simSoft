@@ -22,6 +22,9 @@ if __name__ == '__main__':
     beta = float(sys.argv[7]) # 1e02
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
+    density = np.pi * (0.5)**2 * num_part / (Lx * Ly)
+    # FA: take density and box ratio Lx/Ly as input and then compute Lx and Ly
+    print("Density:", density)
 
     # Code controls
     iterations = 1
@@ -33,7 +36,7 @@ if __name__ == '__main__':
     else:
         load_data = False
     interaction = True
-    integrator = 'nve' # Options are nve, langevin and em
+    integrator = 'langevin' # Options are nve, langevin and em
     potentialType = 'WCA' # Options are LJ and WCA
 
     # Control the parameters 
