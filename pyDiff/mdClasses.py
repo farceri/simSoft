@@ -12,23 +12,25 @@ home = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
 
 # FA: TODO
 @nb.njit(parallel=True, fastmath=True)
-def compute_WCA_forces_numba(positions, energy, neighbours, neighbor_counts, box_size, sigma, epsilon, cutoff):
+def compute_WCA_forces_numba(positions, neighbours, neighbour_counts, box_size, sigma, epsilon, cutoff):
     num_particles = positions.shape[0]
     forces = np.zeros((num_particles, 2))
     energy = np.zeros(num_particles)  # Reset potential
 
     for ii in nb.prange(num_particles):
-        for k in range(neighbor_counts[ii]):
+        for k in range(neighbour_counts[ii]):
             jj = neighbours[ii, k]
+            #if ii == 0: print("particle ii:", ii, "neighbor:", jj)
+            #if jj == 0: print("neighbor jj:", jj, "particle:", ii)
             distances = positions[ii] - positions[jj]
             distances -= np.round(distances/box_size) * box_size
             distance = np.linalg.norm(distances)
             if distance < cutoff:
                 ratio6 = (sigma / distance)**6
                 ratio12 = ratio6 * ratio6
-                energy[ii] += 0.5 * epsilon * (4 * (ratio12 - ratio6) + 1)
+                energy[ii] += 0.5 * 0.5 * epsilon * (4 * (ratio12 - ratio6) + 1)
                 WCAforce = 24 * epsilon * (2 * ratio12 - ratio6) / distance 
-                forces[ii] += WCAforce * distances / distance
+                forces[ii] += 0.5 * WCAforce * distances / distance
 
     return forces, energy
 class MolecularDynamics:
@@ -78,15 +80,20 @@ class MolecularDynamics:
         self.integrator = integrator
 
         # Potential
-        if self.potentialType == "WCA":
+        if self.potentialType == "WCA" or self.potentialType == "WCAnumba":
             self.cutoff = (2**(1/6))*self.sigma 
         elif self.potentialType == "LJ":
             self.cutoff = 3.0 
+        else:
+            self.cutoff = 2.0
         self.forces = np.zeros((num_particles, 2))
         self.energy = np.zeros(num_particles) # FA: per-perticle potential energy array
         self.potentialEnergy = 0
         # Neighbours list
-        self.neighbours = [] 
+        # FA: modified neighbor list for Numba
+        self.max_neighbors = 64  # choose safely (depends on density)
+        self.neighbours = np.full((self.num_particles, self.max_neighbors), -1, dtype=np.int32)
+        self.neighbour_counts = np.zeros(self.num_particles, dtype=np.int32)
         self.skin = 0.3 * self.sigma 
         self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin))) 
         # Positions
@@ -120,7 +127,7 @@ class MolecularDynamics:
         self.velocities = np.random.normal(0, np.sqrt((self.kB*self.temperature)/self.mass), (self.num_particles, 2)) 
         self.velocities = self.velocities - (np.sum(self.velocities, axis=0)/self.num_particles) 
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
-        print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
+        #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
         self.tau = self.dt
         self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
@@ -193,21 +200,19 @@ class MolecularDynamics:
 
     def compute_disk_neighbours(self):
         """"Computies nearest neighbours based on disk distance."""
-
-        self.neighbours = [] # Reset neighbours
-        self.neighbour_counts = []
+        self.neighbour_counts[:] = 0
 
         for ii in range(self.num_particles):
-                ii_list = []
-                for jj in range(ii+1, self.num_particles):
+            count = 0
+            for jj in range(self.num_particles):
+                if jj != ii:
                     distances = self.positions[ii] - self.positions[jj]
-                    distances = distances - (np.round(distances/self.box_size)) * self.box_size
-                    distance = np.sqrt(np.sum(distances**2))
-                    if distance <= self.cutoff + self.skin:
-                        ii_list.append(jj)
-                
-                self.neighbours.append(ii_list.copy())
-                self.neighbour_counts.append(len(ii_list))
+                    distances -= np.round(distances / self.box_size) * self.box_size
+                    if np.sum(distances**2) <= (self.cutoff + self.skin)**2:
+                        if count < self.max_neighbors:
+                            self.neighbours[ii, count] = jj
+                            count += 1
+            self.neighbour_counts[ii] = count
 
         self.neighborCheckPositions = self.positions
 
@@ -220,16 +225,17 @@ class MolecularDynamics:
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
         potential_energy = 0  # Reset potential
         for ii in range(self.num_particles):
-            for jj in self.neighbours[ii]:
             #for jj in range(ii + 1, self.num_particles):
+            for k in range(self.neighbour_counts[ii]):
+                jj = self.neighbours[ii, k]
                 distances = self.positions[ii] - self.positions[jj]
                 distances = distances - (np.round(distances/self.box_size)) * self.box_size
                 distance = np.sqrt(np.sum(distances**2))
                 if distance < self.cutoff:
-                    potential_energy += (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - potShift - ((distance - self.cutoff)*potDerShift))
+                    potential_energy += 0.5 * (4*self.epsilon*((self.sigma/distance)**12-(self.sigma/distance)**6) - potShift - ((distance - self.cutoff)*potDerShift))
                     LJforce = ((4*self.epsilon/distance) * ((12*(self.sigma/distance)**12)-(6*(self.sigma/distance)**6))) - forceShift
-                    self.forces[ii] += ((distances/distance) * LJforce)
-                    self.forces[jj] -= ((distances/distance) * LJforce)
+                    self.forces[ii] += 0.5 * ((distances/distance) * LJforce)
+                    self.forces[jj] -= 0.5 * ((distances/distance) * LJforce)
                     #self.forcesContainer.append(LJforce)
                     #self.distancesContainer.append(distance)
 
@@ -242,8 +248,9 @@ class MolecularDynamics:
         self.forces = np.zeros((self.num_particles, 2))  # Reset forces
         potential_energy = np.zeros(self.num_particles)  # Reset potential
         for ii in range(self.num_particles):
-            for jj in self.neighbours[ii]:
             #for jj in range(ii + 1, self.num_particles):
+            for k in range(self.neighbour_counts[ii]):
+                jj = self.neighbours[ii, k]
                 distances = self.positions[ii] - self.positions[jj]
                 distances -= np.round(distances/self.box_size) * self.box_size
                 distance = np.linalg.norm(distances)
@@ -252,14 +259,14 @@ class MolecularDynamics:
                     ratio6 = (self.sigma / distance)**6
                     ratio12 = ratio6 * ratio6
                     # 0.5 for distributing the energy in the two particles
-                    potential_energy[ii] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
-                    potential_energy[jj] += 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
+                    potential_energy[ii] += 0.5 * 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
+                    potential_energy[jj] += 0.5 * 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
                     #potential_energy[ii] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
                     #potential_energy[jj] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
                     #WCAforce = (4 * self.epsilon / distance) * (12 * (self.sigma/distance)**12 - 6 * (self.sigma/distance)**6)
                     WCAforce = 24 * self.epsilon * (2 * ratio12 - ratio6) / distance 
-                    self.forces[ii] += WCAforce * distances / distance
-                    self.forces[jj] -= WCAforce * distances / distance
+                    self.forces[ii] += 0.5 * WCAforce * distances / distance
+                    self.forces[jj] -= 0.5 * WCAforce * distances / distance
                 #if (ii==2) and (jj==5):
                 #    self.allforcesContainer.append(WCAforce)
                 #if abs(distance - self.cutoff) < 0.01:
@@ -298,7 +305,7 @@ class MolecularDynamics:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
             elif self.potentialType == "WCAnumba":
-                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.energy, self.neighbours, self.neighbour_counts, 
+                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.neighbours, self.neighbour_counts, 
                                                                          self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()
@@ -312,7 +319,7 @@ class MolecularDynamics:
             if self.potentialType == "WCA":
                 self.compute_WCA_forces()
             elif self.potentialType == "WCAnumba":
-                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.energy, self.neighbours, self.neighbour_counts, 
+                self.forces, self.energy = compute_WCA_forces_numba(self.positions, self.neighbours, self.neighbour_counts, 
                                                                          self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()   

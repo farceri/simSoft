@@ -24,7 +24,6 @@ if __name__ == '__main__':
     print_freq = int(num_steps/10)
     density = np.pi * (0.5)**2 * num_part / (Lx * Ly)
     # FA: take density and box ratio Lx/Ly as input and then compute Lx and Ly
-    print("Density:", density)
 
     # Code controls
     iterations = 1
@@ -36,8 +35,9 @@ if __name__ == '__main__':
     else:
         load_data = False
     interaction = True
-    integrator = 'langevin' # Options are nve, langevin and em
-    potentialType = 'WCA' # Options are LJ and WCA
+    integrator = sys.argv[9] # Options are nve, langevin and em
+    potentialType = sys.argv[10] # Options are LJ, WCA and WCAnumba
+    print(f"Input: {integrator} integrator and {potentialType} potential - density: {density}")
 
     # Control the parameters 
     particles = np.array([num_part], dtype=int)
