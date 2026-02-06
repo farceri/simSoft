@@ -8,7 +8,7 @@ import os
 import numpy as np
 import numba as nb
 from mdFunctions import *
-home = '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test'
+home = '/home/auroisflying/thesis/simSoft/pyDiff/test'
 
 # FA: TODO
 @nb.njit(parallel=True, fastmath=True)
@@ -33,6 +33,7 @@ def compute_WCA_forces_numba(positions, neighbours, neighbour_counts, box_size, 
                 forces[ii] += 0.5 * WCAforce * distances / distance
 
     return forces, energy
+
 class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
@@ -129,9 +130,10 @@ class MolecularDynamics:
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
-        self.tau = self.dt
+        self.tau = self.dt * 10
         self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
+        self.directions = np.zeros((self.num_particles, 2))
         # Other checks
         self.forcesContainer = []
         self.allforcesContainer = []
@@ -293,6 +295,7 @@ class MolecularDynamics:
                                                                          self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()
+        else : self.forces = np.zeros((self.num_particles, 2))
         self.velocities += 0.5 * self.forces / self.mass * self.dt
 
     def velocity_verlet_langevin(self):
@@ -324,10 +327,10 @@ class MolecularDynamics:
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()   
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
-        directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
-        self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce /self.gamma) * directions * self.dt
+        self.directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
+        self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
         self.apply_pbc()
-        self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce /self.gamma) * directions * self.dt
+        self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
 
     def compute_potentialenergy(self):
         """Compute the potential energy of the system."""

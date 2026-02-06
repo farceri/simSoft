@@ -7,6 +7,7 @@ import os
 import pickle
 import warnings
 import numpy as np
+import numba as nb
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
 import matplotlib.animation as animation
@@ -60,6 +61,35 @@ def compute_msd(positions: np.ndarray) -> np.ndarray:
         msd[timestep] = np.mean(np.sum(displacement ** 2, axis=1))
     return msd
 
+@nb.njit(parallel=True, fastmath=True)
+def compute_ssf_jit(unwrappedPositions, kMods):
+    num_timesteps, num_particles, dim = unwrappedPositions.shape
+    angles = np.arange(0, 2*np.pi, np.pi/4)
+    num_angles = angles.size
+    
+    ssf_total_self = np.ones(kMods.size, dtype=np.complex128)
+    ssf_total_int = np.zeros(kMods.size, dtype=np.complex128)
+
+    for t0 in nb.prange(num_timesteps - 1):
+        for ii in range(kMods.size):
+            kMod = kMods[ii]
+            ssf_int = 0.0 + 0.0j
+            for angle_idx in range(num_angles):
+                angle = angles[angle_idx]
+                kVec = np.array([kMod * np.cos(angle), kMod * np.sin(angle)])
+                for i in range(num_particles):
+                    for j in range(num_particles):
+                        if i != j:
+                            delta = unwrappedPositions[t0, i, :] - unwrappedPositions[t0, j, :]
+                            ssf_int += np.exp(1j * np.dot(delta, kVec))
+            ssf_total_int[ii] += ssf_int / (num_particles * num_angles)
+
+    ssf_total_int /= (num_timesteps - 1)
+    ssf_total_self = ssf_total_self.real
+    ssf_total_int = ssf_total_int.real
+
+    return ssf_total_self, ssf_total_int
+
 def compute_ssf(unwrappedPositions: np.ndarray, kMods: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
     """
     This function computes the Static Structure Factor over the timesteps meaned over 8 different
@@ -107,6 +137,41 @@ def compute_ssf(unwrappedPositions: np.ndarray, kMods: np.ndarray) -> tuple[np.n
     ssf_total_int = np.real(ssf_total_int)
 
     return ssf_total_self, ssf_total_int
+
+@nb.njit(parallel=True, fastmath=True)
+def compute_isf_jit(unwrappedPositions, chosenk):
+
+    num_timesteps, num_particles, dim = unwrappedPositions.shape
+    angles = np.arange(0, 2*np.pi, np.pi/4)
+    num_angles = angles.size
+    isf_total_self = np.zeros(num_timesteps - 1, dtype=np.complex128)
+    isf_total_int = np.zeros(num_timesteps - 1, dtype=np.complex128)
+
+    for t0 in nb.prange(num_timesteps - 1):
+        for t in range(t0, num_timesteps - 1):
+            isf_self = 0.0 + 0.0j
+            isf_int = 0.0 + 0.0j
+            kMod = chosenk
+            for angle_idx in range(num_angles):
+                angle = angles[angle_idx]
+                kVec = np.array([kMod * np.cos(angle), kMod * np.sin(angle)])
+
+                for i in range(num_particles):
+                    delta = unwrappedPositions[t, i, :] - unwrappedPositions[t0, i, :]
+                    isf_self += np.exp(1j * np.dot(delta, kVec))/ (num_particles*num_angles)
+
+                for i in range(num_particles):
+                    for j in range(num_particles):
+                        if i != j:
+                            delta = unwrappedPositions[t, i, :] - unwrappedPositions[t0, j, :]
+                            isf_int += np.exp(1j * np.dot(delta, kVec))/ (num_particles*(num_particles-1)*num_angles)
+            isf_total_self[t-t0] += (isf_self) / ((num_timesteps - 1) - (t-t0))
+            isf_total_int[t-t0] += (isf_int) / ((num_timesteps - 1) - (t-t0))
+
+    isf_total_self = isf_total_self.real 
+    isf_total_int = isf_total_int.real 
+
+    return isf_total_self, isf_total_int
 
 def compute_isf(unwrappedPositions: np.ndarray, chosenk: float) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -338,22 +403,16 @@ def reduce_vectors(vector1: np.ndarray, vector2: np.ndarray, eps: float) -> tupl
 
 #---------------------------------------MAIN-GRAPHS-----------------------------------------
 
-def energy_graph(md, simTime: np.ndarray, kinetic: np.ndarray, potential: np.ndarray, directory: str) -> None:
+def energy_graph(home: str, directory: str) -> None:
     """
     Plot the energy evolution over time.
 
     Parameters
     ----------
-    md : MolecularDynamics
-        An instance of the class MolecularDynamics.
-    simTime : np.ndarray
-        The time of the simulation.
-    kinetic : np.ndarray
-        The kinetic energy of the evolved simulation.
-    potential : np.ndarray
-        The potential energy of the evolved simulation.
-    directory : str
+    home : str
         Directory in which to save the plot.
+    directory : str
+        Directory in which to get the data.
 
     Returns
     ----------
@@ -361,18 +420,25 @@ def energy_graph(md, simTime: np.ndarray, kinetic: np.ndarray, potential: np.nda
     """
 
     plt.clf()
+
+    subdir = "iteration1"
+    loadPath = os.path.join(directory, subdir)
+    evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
+    with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
     plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2), md.temperature), fontsize=16)
-    plt.plot(simTime, kinetic, color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
+    plt.plot(evolutionData[:, 0], evolutionData[:, 3], color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
     plt.tick_params(axis='both', labelsize=14)
-    plt.plot(simTime, potential, color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
+    plt.plot(evolutionData[:, 0], evolutionData[:, 2], color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
     plt.tick_params(axis='both', labelsize=14)
-    plt.plot(simTime, potential+kinetic, color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
+    plt.plot(evolutionData[:, 0], evolutionData[:, 2]+evolutionData[:, 3], color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
     plt.tick_params(axis='both', labelsize=14)
     plt.ylabel("Energies", fontsize=14)
     plt.xlabel(r"Simulation time, $t$", fontsize=14)
     plt.tight_layout()
     plt.legend()
-    plt.savefig(directory + "/energies.png", transparent=False, format="png")
+    plt.savefig(home + "/energies.png", transparent=False, format="png")
 
 def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
     """
@@ -403,25 +469,41 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
             popt, pcov = curve_fit(fitFunc_pow, simTime, msd) 
             plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt[0], popt[1], popt[2]), color=color, linestyle='solid', linewidth=1) 
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\propto t^{%.1f}$" %(md.num_particles, md.temperature, popt[1]))
+                label=r"$N$=%.0f, T=%.1f, fit $\propto t^{%.1f}$" %(md.num_particles, md.temperature, popt[1]))
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
                 label=r"$\rho$=%.2f, T=%.1f" %(density, md.temperature))
-    else: 
+    elif md.integrator == 'langevin':
         if md.interaction == False:
             # Ballistic regime
-            continuoussimTime = np.linspace(0, np.max(simTime[:int(1/eq)]), 100)
-            popt1, pcov1 = curve_fit(fitFunc_pow, simTime[:int(1/eq)], msd[:int(1/eq)]) 
-            plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt1[0], popt1[1], popt1[2]), color=color, linestyle='solid', linewidth=1) 
+            if int(1/eq) > 3:
+                continuoussimTime = np.linspace(0, np.max(simTime[:int(1/eq)]), 100)
+                popt1, pcov1 = curve_fit(fitFunc_pow, simTime[:int(1/eq)], msd[:int(1/eq)]) 
+                plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt1[0], popt1[1], popt1[2]), color=color, linestyle='solid', linewidth=1) 
             # Diffusive regime
-            continuoussimTime = np.linspace(0, np.max(simTime[int(6/eq):]), 100)
-            popt2, pcov2 = curve_fit(fitFunc_lin, simTime[int(6/eq):], msd[int(6/eq):]) 
-            plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt2[0], popt2[1]), color=color, linestyle='solid', linewidth=1) 
-            plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto t^{%.1f}\rightarrow\propto t$" %(md.num_particles, md.temperature, md.gamma, popt1[1]))
+            if int(6/eq) < 95:
+                continuoussimTime = np.linspace(np.min(simTime[int(6/eq):]), np.max(simTime[int(6/eq):]), 100)
+                popt2, pcov2 = curve_fit(fitFunc_lin, simTime[int(6/eq):], msd[int(6/eq):]) 
+                plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt2[0], popt2[1]), color=color, linestyle='solid', linewidth=1) 
+            
+            if int(1/eq)>3 and int(6/eq)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, fit $\propto t^{%.1f}\rightarrow\propto %.1ft$" %(md.num_particles, md.temperature, md.gamma, popt1[1], popt2[0]))
+            elif int(6/eq)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\rightarrow\propto t$, fit $\propto %.1ft$" %(md.num_particles, md.temperature, md.gamma, popt2[0]))
+            elif int(1/eq)>3: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, fit $\propto t^{%.1f}$" %(md.num_particles, md.temperature, md.gamma, popt1[1]))
+            else: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\rightarrow\propto t$" %(md.num_particles, md.temperature, md.gamma))
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
                 label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, md.temperature, md.gamma))
+    elif md.integrator == 'em':
+        # Diffusive regime at short time before the caging
+        continuoussimTime = np.linspace(0, np.max(simTime[:int(5/eq)]), 100)
+        popt, pcov = curve_fit(fitFunc_lin, simTime[:int(5/eq)], msd[:int(5/eq)]) 
+        plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt[0], popt[1]), color=color, linestyle='solid', linewidth=1) 
+        plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+            label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $D=%.1f$" %(md.num_particles, md.temperature, md.gamma, popt[0]/4))
 
 def msdTotality(home: str, directoryList: list[str], title: str, outputName: str) -> None:
     """
@@ -518,7 +600,6 @@ def ssfPlotter(kMods: np.ndarray, ssf_self: np.ndarray, ssf_int: np.ndarray, md,
             plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$N$=%.0f, T=%.1f, $\gamma=%.1f$" %(md.num_particles, md.temperature, md.gamma))
         else:
             plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$\rho$=%.2f, T=%.1f, $\gamma=%.1f$" %(density, md.temperature, md.gamma))
-    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
     
 def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str, graph: bool) -> np.ndarray:
     """
@@ -573,7 +654,8 @@ def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str
                     md = pickle.load(f)
 
                 kMods = np.linspace((2*np.pi/md.box_size[0]), (4*np.pi), 30)
-                ssf_self_temp, ssf_int_temp = compute_ssf(md.allUnwrappedPositions, kMods)
+                unwrappedPositions = np.array(md.allUnwrappedPositions, dtype=np.float64)
+                ssf_self_temp, ssf_int_temp = compute_ssf_jit(unwrappedPositions, kMods)
                 if ssf_self is None: 
                     ssf_self = ssf_self_temp/np.shape(subdirectories)[0]
                     ssf_int = ssf_int_temp/np.shape(subdirectories)[0]
@@ -702,7 +784,8 @@ def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title:
                 with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
                     md = pickle.load(f)
 
-                isf_self_temp, isf_int_temp = compute_isf(md.allUnwrappedPositions, kValues[dirCounter])
+                unwrappedPositions = np.array(md.allUnwrappedPositions, dtype=np.float64)
+                isf_self_temp, isf_int_temp = compute_isf_jit(unwrappedPositions, kValues[dirCounter])
                 if isf_self is None: 
                     isf_self = isf_self_temp/np.shape(subdirectories)[0]
                     isf_int = isf_int_temp/np.shape(subdirectories)[0]

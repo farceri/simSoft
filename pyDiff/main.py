@@ -8,7 +8,7 @@ from scipy.optimize import curve_fit
 from mdFunctions import *
 from mdClasses import MolecularDynamics
 #np.random.seed(0)
-# python3 main.py '/home/auroisflying/thesis/gitVersion/simSoft/pyDiff/test' 1e06 1e02 30 10 0.5 1e02 0/read
+# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 10000 50 10 10 1 10 0 langevin WCA
 
 if __name__ == '__main__':
 
@@ -27,7 +27,7 @@ if __name__ == '__main__':
 
     # Code controls
     iterations = 1
-    randomizingSteps = int(1e04) # FA: easier to read than 100000
+    randomizingSteps = int(0) # FA: easier to read than 100000
     compute_gif = False
     read_data = sys.argv[8] # FA: added as in input
     if read_data == 'read':
