@@ -10,7 +10,6 @@ import numba as nb
 from mdFunctions import *
 home = '/home/auroisflying/thesis/simSoft/pyDiff/test'
 
-# FA: TODO
 @nb.njit(parallel=True, fastmath=True)
 def compute_WCA_forces_numba(positions, neighbours, neighbour_counts, box_size, sigma, epsilon, cutoff):
     num_particles = positions.shape[0]
@@ -88,23 +87,21 @@ class MolecularDynamics:
         else:
             self.cutoff = 2.0
         self.forces = np.zeros((num_particles, 2))
-        self.energy = np.zeros(num_particles) # FA: per-perticle potential energy array
+        self.energy = np.zeros(num_particles) # Per-perticle potential energy array
         self.potentialEnergy = 0
         # Neighbours list
-        # FA: modified neighbor list for Numba
-        self.max_neighbors = 64  # choose safely (depends on density)
+        self.max_neighbors = 64  # Choose safely (depends on density)
         self.neighbours = np.full((self.num_particles, self.max_neighbors), -1, dtype=np.int32)
         self.neighbour_counts = np.zeros(self.num_particles, dtype=np.int32)
         self.skin = 0.3 * self.sigma 
-        self.cellDivision = int(np.floor(self.box_size[0]/(self.cutoff + self.skin))) 
+        self.cellDivision = int(np.floor(max(self.box_size[0], self.box_size[1])/(self.cutoff + self.skin))) 
         # Positions
         if initialConf:
             # Take the existing saved configuration from the first iteration
             if self.interaction : optionsDirectory = f"{self.integrator}WCA_N{self.num_particles:d}_T{self.temperature:.1f}_gamma{self.gamma:.2f}"
             else : optionsDirectory = f"{integrator}FREE_N{self.num_particles:d}_T{self.temperature:.1f}_gamma{self.gamma:.2f}"
-            iterationDirectory = f"iteration{1}"
-            savePath = os.path.join(home, optionsDirectory, iterationDirectory)
-            data = np.load(savePath + os.sep + 'lastConfiguration.npz')
+            savePath = os.path.join(home, optionsDirectory)
+            data = np.load(savePath + os.sep + 'initialConfiguration.npz')
             self.positions = data["positions"]
             #self.velocities = data[:, 2:]
         else:
@@ -201,7 +198,7 @@ class MolecularDynamics:
         self.neighborCheckPositions = self.positions
 
     def compute_disk_neighbours(self):
-        """"Computies nearest neighbours based on disk distance."""
+        """"Computes nearest neighbours based on disk distance."""
         self.neighbour_counts[:] = 0
 
         for ii in range(self.num_particles):
@@ -243,7 +240,6 @@ class MolecularDynamics:
 
         self.potentialEnergy = potential_energy
 
-    # FA: REMOVED UPDATE OF JJTH PARTICLE TO USE PARALLEL COMPUTATION
     def compute_WCA_forces(self):
         """Forces using WCA potential."""
         
@@ -257,15 +253,11 @@ class MolecularDynamics:
                 distances -= np.round(distances/self.box_size) * self.box_size
                 distance = np.linalg.norm(distances)
                 if distance < self.cutoff:
-                    # FA: moved ratio6 and ratio12 inside the if condition so they are computed only if necessary
                     ratio6 = (self.sigma / distance)**6
                     ratio12 = ratio6 * ratio6
                     # 0.5 for distributing the energy in the two particles
                     potential_energy[ii] += 0.5 * 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
                     potential_energy[jj] += 0.5 * 0.5 * self.epsilon * (4 * (ratio12 - ratio6) + 1)
-                    #potential_energy[ii] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
-                    #potential_energy[jj] += 0.5 * (self.epsilon * 4 * ((self.sigma/distance)**12 - (self.sigma/distance)**6) + self.epsilon)
-                    #WCAforce = (4 * self.epsilon / distance) * (12 * (self.sigma/distance)**12 - 6 * (self.sigma/distance)**6)
                     WCAforce = 24 * self.epsilon * (2 * ratio12 - ratio6) / distance 
                     self.forces[ii] += 0.5 * WCAforce * distances / distance
                     self.forces[jj] -= 0.5 * WCAforce * distances / distance

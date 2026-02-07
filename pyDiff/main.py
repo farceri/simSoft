@@ -8,28 +8,29 @@ from scipy.optimize import curve_fit
 from mdFunctions import *
 from mdClasses import MolecularDynamics
 #np.random.seed(0)
-# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 10000 50 10 10 1 10 0 langevin WCA
+# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e05 50 0.6 3 0.5 1e02 0 em WCA
 
 if __name__ == '__main__':
 
     start = time.time()
     directory = sys.argv[1] 
     num_steps = int(float(sys.argv[2])) 
-    num_part = int(float(sys.argv[3])) # FA: ADDED NUM PARTICLES AS AN INPUT PARAMETER
-    Lx = float(sys.argv[4]) # 30
-    Ly = float(sys.argv[5]) # 10
-    temp = float(sys.argv[6]) # 0.5
-    beta = float(sys.argv[7]) # 1e02
+    num_part = int(float(sys.argv[3])) 
+    packingFraction = float(sys.argv[4])
+    Lratio = float(sys.argv[5])
+    temp = float(sys.argv[6]) 
+    beta = float(sys.argv[7]) 
     save_freq = int(num_steps/100)
     print_freq = int(num_steps/10)
-    density = np.pi * (0.5)**2 * num_part / (Lx * Ly)
-    # FA: take density and box ratio Lx/Ly as input and then compute Lx and Ly
+
+    Ly = np.sqrt(num_part * np.pi * (0.5)**2 / (Lratio * packingFraction))
+    Lx = Lratio * Ly
 
     # Code controls
-    iterations = 1
-    randomizingSteps = int(0) # FA: easier to read than 100000
+    iterations = 2
+    randomizingSteps = int(1e03) 
     compute_gif = False
-    read_data = sys.argv[8] # FA: added as in input
+    read_data = sys.argv[8] 
     if read_data == 'read':
         load_data = True
     else:
@@ -37,7 +38,7 @@ if __name__ == '__main__':
     interaction = True
     integrator = sys.argv[9] # Options are nve, langevin and em
     potentialType = sys.argv[10] # Options are LJ, WCA and WCAnumba
-    print(f"Input: {integrator} integrator and {potentialType} potential - density: {density}")
+    print(f"Input: {integrator} integrator and {potentialType} potential - density: {packingFraction}")
 
     # Control the parameters 
     particles = np.array([num_part], dtype=int)
@@ -55,8 +56,8 @@ if __name__ == '__main__':
                 for iteration in range(iterations):
 
                     # Create md object with input settings - more settings can be added
-                    md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction = interaction, 
-                                           initialConf = load_data, integrator=integrator, Lx=Lx, Ly=Ly)
+                    md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction=interaction, 
+                                           initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly)
                     md.positions_save_freq = save_freq
 
                     # Create arrays for storing energy and msd
@@ -88,11 +89,10 @@ if __name__ == '__main__':
                         epot = md.compute_potentialenergy() / num_particles
                         ekin = md.compute_kineticenergy() / num_particles
                         etot = epot + ekin
-                        print(f"Energy after initialization, U: {epot}, K: {ekin}, U+K: {etot}") # FA: added energy print
+                        print(f"Energy after initialization, U: {epot}, K: {ekin}, U+K: {etot}") 
                         savePath = os.path.join(directory, optionsDirectory)
                         os.makedirs(savePath, exist_ok=True)
                         np.savez(os.path.join(savePath, "initialConfiguration.npz"), positions = md.positions, velocities = md.velocities)
-                        # FA: CONSIDER USING THE SAME INITIAL CONFIGURATION FOR DIFFERENT VALUES OF ACTIVITY
 
                     # Run integration, store and print data at given frequency
                     smallOrder()
@@ -118,7 +118,7 @@ if __name__ == '__main__':
                             potential = np.append(potential, md.compute_potentialenergy()/num_particles)
                             kinetic = np.append(kinetic, md.compute_kineticenergy()/num_particles)
                         if step % md.positions_save_freq == 0:
-                            md.allPositions.append(md.positions.copy()) # FA: REMOVED TO OCCUPY LESS MEMORY, IT CAN BE COMPUTED IN THE ANALYSIS
+                            #md.allPositions.append(md.positions.copy()) # FA: REMOVED TO OCCUPY LESS MEMORY, IT CAN BE COMPUTED IN THE ANALYSIS
                             md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
                             md.allVelocities.append(md.velocities.copy())
                         if step % print_freq == 0:

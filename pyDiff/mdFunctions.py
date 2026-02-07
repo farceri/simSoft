@@ -127,7 +127,6 @@ def compute_ssf(unwrappedPositions: np.ndarray, kMods: np.ndarray) -> tuple[np.n
             for angle in angles: 
                 kVec = np.array((kMod * np.cos(angle), kMod * np.sin(angle))) 
                 delta = unwrappedPositions[t0][:, None, :] - unwrappedPositions[t0] [None, :, :] 
-                #delta -= self.box_size[0] * np.round(delta / self.box_size[0])
                 delta = delta[mask].reshape(num_particles, num_particles-1, -1) 
                 ssf_int[ii] += np.sum(np.exp(1j * np.tensordot(delta, kVec, axes=([2],[0]))))/(num_particles) 
             ssf_total_int[ii] += (ssf_int[ii]) / (np.shape(angles)[0])
@@ -312,7 +311,7 @@ def part_evolution(md, positions: np.ndarray, points: int = 1, step: int = 1) ->
     # Gif visual setup    
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
-    if md.interaction : plt.title(r"N=%d, T=%.1f, $\rho$=%.2f, $\sigma$=%.1f" %(md.num_particles, md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2), md.sigma))
+    if md.interaction : plt.title(r"N=%d, T=%.1f, $\rho$=%.2f, $\sigma$=%.1f" %(md.num_particles, md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.sigma))
     else : plt.title(r"N=%d, T=%.1f" %(md.num_particles, md.temperature))
     plt.xlabel("x")
     plt.ylabel("y")
@@ -427,7 +426,7 @@ def energy_graph(home: str, directory: str) -> None:
     with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
 
-    plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2), md.temperature), fontsize=16)
+    plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.temperature), fontsize=16)
     plt.plot(evolutionData[:, 0], evolutionData[:, 3], color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
     plt.tick_params(axis='both', labelsize=14)
     plt.plot(evolutionData[:, 0], evolutionData[:, 2], color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
@@ -460,7 +459,7 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
     A plot showing the time evolution of Mean Squared Displacement.
     """
 
-    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
     eq = md.gamma*md.dt*md.positions_save_freq
 
     if md.integrator == 'nve': 
@@ -589,7 +588,7 @@ def ssfPlotter(kMods: np.ndarray, ssf_self: np.ndarray, ssf_int: np.ndarray, md,
     A plot showing the Static Structure Factor with increasing k magnitudes.
     """
 
-    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
     if md.integrator == 'nve': 
         if md.interaction == False:
             plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$N$=%.0f, T=%.1f" %(md.num_particles, md.temperature))
@@ -653,7 +652,8 @@ def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str
                 with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
                     md = pickle.load(f)
 
-                kMods = np.linspace((2*np.pi/md.box_size[0]), (4*np.pi), 30)
+                maxSize = max(md.box_size[0], md.box_size[1])
+                kMods = np.linspace((2*np.pi/maxSize), (4*np.pi), 30)
                 unwrappedPositions = np.array(md.allUnwrappedPositions, dtype=np.float64)
                 ssf_self_temp, ssf_int_temp = compute_ssf_jit(unwrappedPositions, kMods)
                 if ssf_self is None: 
@@ -706,7 +706,7 @@ def isfPlotter(simTime: np.ndarray, isf_self: np.ndarray, isf_int: np.ndarray, m
         Value corresponding to the ISF fit.
     """
 
-    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
     tau = 0
 
     mask = (isf_self + isf_int) > 0.1
@@ -794,8 +794,8 @@ def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title:
                     isf_int += isf_int_temp/np.shape(subdirectories)[0]
 
         highestValue = max(highestValue, np.max(isf_self + isf_int))
-        taus[dirCounter] = isfPlotter(evolutionData[:, 0], isf_self, isf_int, md, kValues[dirCounter], colors[colCounter])
-        #taus[dirCounter] = isfPlotter(evolutionData[:, 0], isf_self, isf_int, md, np.mean(kValues), colors[colCounter])
+        #taus[dirCounter] = isfPlotter(evolutionData[:, 0], isf_self, isf_int, md, kValues[dirCounter], colors[colCounter])
+        taus[dirCounter] = isfPlotter(evolutionData[:, 0], isf_self, isf_int, md, np.mean(kValues), colors[colCounter])
         colCounter += 1
         dirCounter += 1
 
@@ -867,7 +867,7 @@ def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
         Value corresponding to the cvv fit.
     """
 
-    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]**2)
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
     continuoussimTime = np.linspace(0, np.max(simTime), 10000)
 
     popt, pcov = curve_fit(fitFunc_exp, simTime, cvv, maxfev=100000, p0=[1, 2, 1, 0])
