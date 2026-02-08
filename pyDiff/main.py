@@ -6,9 +6,9 @@ import numpy as np
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
 from mdFunctions import *
-from mdClasses import MolecularDynamics
+from mdClasses import *
 #np.random.seed(0)
-# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e05 50 0.6 3 0.5 1e02 0 em WCA
+# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e07 1e03 0.5 1 10 0.01 read em WCAnumba
 
 if __name__ == '__main__':
 
@@ -27,8 +27,8 @@ if __name__ == '__main__':
     Lx = Lratio * Ly
 
     # Code controls
-    iterations = 2
-    randomizingSteps = int(1e03) 
+    iterations = 1
+    randomizingSteps = int(0) 
     compute_gif = False
     read_data = sys.argv[8] 
     if read_data == 'read':
@@ -38,7 +38,6 @@ if __name__ == '__main__':
     interaction = True
     integrator = sys.argv[9] # Options are nve, langevin and em
     potentialType = sys.argv[10] # Options are LJ, WCA and WCAnumba
-    print(f"Input: {integrator} integrator and {potentialType} potential - density: {packingFraction}")
 
     # Control the parameters 
     particles = np.array([num_part], dtype=int)
@@ -60,12 +59,12 @@ if __name__ == '__main__':
                                            initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly)
                     md.positions_save_freq = save_freq
 
-                    # Create arrays for storing energy and msd
+                    # Create arrays for storing energy 
                     temp = np.empty(0)
-                    msd = np.empty(0)
                     potential = np.empty(0)
                     kinetic = np.empty(0)
-                    md.compute_disk_neighbours()
+                    #md.compute_disk_neighbours()
+                    md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
                     #md.compute_cell_neighbours()
                     smallOrder()
                     if load_data == True:
@@ -77,7 +76,8 @@ if __name__ == '__main__':
                             distances -= np.round(distances/md.box_size) * md.box_size
                             distance = np.linalg.norm(distances, axis=1)
                             if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
-                                md.compute_disk_neighbours() 
+                                #md.compute_disk_neighbours() 
+                                md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
                                 #md.compute_cell_neighbours()
                             if integrator == 'nve':
                                 md.velocity_verlet_nve()
@@ -105,7 +105,9 @@ if __name__ == '__main__':
                         distances -= np.round(distances/md.box_size) * md.box_size
                         distance = np.linalg.norm(distances, axis=1)
                         if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
-                            md.compute_disk_neighbours() 
+                            print("Update!")
+                            #md.compute_disk_neighbours() 
+                            md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
                             #md.compute_cell_neighbours()
                         if integrator == 'nve':
                             md.velocity_verlet_nve()
@@ -118,7 +120,7 @@ if __name__ == '__main__':
                             potential = np.append(potential, md.compute_potentialenergy()/num_particles)
                             kinetic = np.append(kinetic, md.compute_kineticenergy()/num_particles)
                         if step % md.positions_save_freq == 0:
-                            #md.allPositions.append(md.positions.copy()) # FA: REMOVED TO OCCUPY LESS MEMORY, IT CAN BE COMPUTED IN THE ANALYSIS
+                            md.allPositions.append(md.positions.copy()) 
                             md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
                             md.allVelocities.append(md.velocities.copy())
                         if step % print_freq == 0:

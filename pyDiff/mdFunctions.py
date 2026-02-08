@@ -472,6 +472,7 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
                 label=r"$\rho$=%.2f, T=%.1f" %(density, md.temperature))
+            
     elif md.integrator == 'langevin':
         if md.interaction == False:
             # Ballistic regime
@@ -496,13 +497,14 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
                 label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, md.temperature, md.gamma))
+            
     elif md.integrator == 'em':
         # Diffusive regime at short time before the caging
         continuoussimTime = np.linspace(0, np.max(simTime[:int(5/eq)]), 100)
         popt, pcov = curve_fit(fitFunc_lin, simTime[:int(5/eq)], msd[:int(5/eq)]) 
         plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt[0], popt[1]), color=color, linestyle='solid', linewidth=1) 
         plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-            label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $D=%.1f$" %(md.num_particles, md.temperature, md.gamma, popt[0]/4))
+            label=r"$\rho$=%.0f, T=%.1f, $\gamma$=%.1f, $D=%.1f$" %(density, md.temperature, md.gamma, popt[0]/4))
 
 def msdTotality(home: str, directoryList: list[str], title: str, outputName: str) -> None:
     """

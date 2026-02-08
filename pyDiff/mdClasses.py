@@ -33,6 +33,27 @@ def compute_WCA_forces_numba(positions, neighbours, neighbour_counts, box_size, 
 
     return forces, energy
 
+@nb.njit(parallel=True, fastmath=True)
+def compute_disk_neighbours_numba(num_particles, positions, box_size, cutoff, skin, neighbours, max_neighbors):
+        """"Computes nearest neighbours based on disk distance."""
+        
+        neighbour_counts = np.zeros(num_particles, dtype=np.int32)
+
+        for ii in nb.prange(num_particles):
+            count = 0
+            for jj in range(num_particles):
+                if jj != ii:
+                    distances = positions[ii] - positions[jj]
+                    distances -= np.round(distances / box_size) * box_size
+                    if np.sum(distances**2) <= (cutoff + skin)**2:
+                        if count < max_neighbors:
+                            neighbours[ii, count] = jj
+                            count += 1
+            neighbour_counts[ii] = count
+
+        neighborCheckPositions = positions
+        return neighborCheckPositions, neighbour_counts, neighbours
+
 class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
@@ -127,7 +148,7 @@ class MolecularDynamics:
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
-        self.tau = self.dt * 10
+        self.tau = 10
         self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
         self.directions = np.zeros((self.num_particles, 2))
@@ -149,6 +170,8 @@ class MolecularDynamics:
             f"Temperature: {self.temperature:.1f}\n"
             f"Friction: {self.gamma:.1f}\n"
             f"Time step: {self.dt:.4f}\nBox size: Lx {self.box_size[0]:.1f} and Ly {self.box_size[1]:.1f}\n"
+            f"Density: {self.num_particles * np.pi * (self.sigma/2)**2 / (self.box_size[0]*self.box_size[1])}\n"
+            f"Integrator: {self.integrator}\n"
             f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
         )
 
