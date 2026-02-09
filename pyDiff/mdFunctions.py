@@ -1054,3 +1054,119 @@ def sampleForces(md, directory: str) -> None:
     plt.savefig(directory + "/continuous2.png", transparent=False, format="png")
 
 #------------------------------------WORK-IN-PROGRESS---------------------------------------
+
+def lastConfiguration(md, directory):
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    subdivision = 10
+    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/subdivision, step=md.box_size[0]/subdivision))
+    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/subdivision, step=md.box_size[1]/subdivision))
+
+    data = np.load(directory + os.sep + 'lastConfiguration.npz')
+    positions = data["positions"]
+    adj = md.box_size[0]/2 * 0.75
+
+    plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
+    plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
+
+    if md.interaction : plt.title(r"T=%.1f, $\rho$=%.2f, $\gamma$=%.1f, $\tau_p$=%.1f, $t$=%.1f" %(md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.gamma, md.tau, md.steps*md.dt))
+    else : plt.title(r"N=%d, T=%.1f" %(md.num_particles, md.temperature))
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.gca().set_aspect('equal')
+
+    radius = md.sigma/2
+    trans = ax.transData.transform
+    inv = fig.dpi_scale_trans.inverted().transform  
+    x0, y0 = trans((0,0))
+    x1, y1 = trans((radius, 0))
+    radius_pixels = x1 - x0
+    if md.interaction : size = radius_pixels**2
+    else : size = 20
+
+    positions[:, 0] += adj
+    positions[:, 0] = (positions[:, 0] + md.box_size[0] / 2) % md.box_size[0] - md.box_size[0] / 2
+
+    for ii in range(md.num_particles):
+        plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.5)
+
+    plt.savefig(directory + "/lastConfig.png", transparent=False, format="png")
+
+def densitySquares(md, directory, num_bins, yDivision, perc):
+
+    data = np.load(directory + os.sep + 'lastConfiguration.npz')
+    positions = data["positions"]
+
+    evolutionData = np.loadtxt(directory + os.sep + 'evolutionData.dat')
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    step = int(np.shape(md.allPositions)[0]*perc/100)
+    if step >= np.shape(md.allPositions)[0]: step = np.shape(md.allPositions)[0]-1
+    positions = md.allPositions[step]
+
+    sideSquares = md.box_size[1]/yDivision
+
+    x = -md.box_size[0]/2
+    y = -md.box_size[1]/2
+
+    density = np.zeros((yDivision * int(md.box_size[0] / md.box_size[1]), yDivision), dtype=int)
+
+    for ii in range(yDivision):
+        x = -md.box_size[0]/2
+        for jj in range(yDivision * int(md.box_size[0] / md.box_size[1])):
+            for particle in range(md.num_particles):
+                if (x <= positions[particle, 0] < x + sideSquares) and (y <= positions[particle, 1] < y + sideSquares):
+                    density[jj, ii] += 1
+            x += sideSquares
+        y += sideSquares
+
+    density = density*(np.pi*(0.5)**2)/sideSquares**2
+    dens = density.ravel() 
+
+    hist, bin_edges = np.histogram(dens, bins=num_bins, density=True)  
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    plt.figure()
+    plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="seagreen", label=f"%.0f" %(perc))
+    plt.xlabel(r"$\phi$")
+    plt.ylabel(r"$P(\phi)$")
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(directory + "/hist.png", transparent=False, format="png")
+
+def densityBands(md, directory, xDivision, perc):
+
+    data = np.load(directory + os.sep + 'lastConfiguration.npz')
+    positions = data["positions"]
+
+    evolutionData = np.loadtxt(directory + os.sep + 'evolutionData.dat')
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    step = int(np.shape(md.allPositions)[0]*perc/100)
+    if step >= np.shape(md.allPositions)[0]: step = np.shape(md.allPositions)[0]-1
+    positions = md.allPositions[step]
+
+    sideBands = md.box_size[0]/xDivision
+
+    x = -md.box_size[0]/2
+
+    density = np.zeros((xDivision), dtype=int)
+
+    for ii in range(xDivision):
+        for particle in range(md.num_particles):
+            if (x <= positions[particle, 0] < x + sideBands):
+                density[ii] += 1
+        x += sideBands
+
+    density = density*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
+
+    plt.figure()
+    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="seagreen", label=f"%.0f" %(perc))
+    plt.xlabel(r"$L_x$")
+    plt.ylabel(r"$\phi$")
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(directory + "/dist.png", transparent=False, format="png")  

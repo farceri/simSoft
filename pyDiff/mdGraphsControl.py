@@ -25,9 +25,19 @@ if __name__ == '__main__':
                         optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}" 
                         directoryList.append(optionsDirectory)
 
+    directory = home + os.sep + f"{'em'}{'WCA'}_N{1000:d}_T{10.0:.1f}_gamma{0.1:.2f}" + os.sep + "iteration1"
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    #lastConfiguration(md, directory)
+
+    perc=100
+    densitySquares(md, directory, num_bins=6, yDivision=5, perc=perc)
+    densityBands(md, directory, xDivision=100, perc=perc)
+
     #msdTotality(home, directoryList, title = "MSD", outputName = "msd")
-    kValues = ssfTotality(home, directoryList, title = "SSF", outputName = "ssf", graph = True)
-    taus = isfTotality(home, directoryList, kValues, title = "ISF", outputName = "isf")
+    #kValues = ssfTotality(home, directoryList, title = "SSF", outputName = "ssf", graph = True)
+    #taus = isfTotality(home, directoryList, kValues, title = "ISF", outputName = "isf")
     #tauPlotter(home, r"$\tau$ with increasing $T$", "tau", temperatures, taus, "seagreen")
     #cvvTotality(home, directoryList, title = "CVV", outputName = "cvv")
 

@@ -8,7 +8,7 @@ from scipy.optimize import curve_fit
 from mdFunctions import *
 from mdClasses import *
 #np.random.seed(0)
-# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e07 1e03 0.5 1 10 0.01 read em WCAnumba
+# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e03 1e03 0.5 1 10 0.1 read em WCAnumba
 
 if __name__ == '__main__':
 
@@ -28,7 +28,7 @@ if __name__ == '__main__':
 
     # Code controls
     iterations = 1
-    randomizingSteps = int(0) 
+    randomizingSteps = int(1e04) 
     compute_gif = False
     read_data = sys.argv[8] 
     if read_data == 'read':
@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
                     # Create md object with input settings - more settings can be added
                     md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction=interaction, 
-                                           initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly)
+                                           initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly, steps=num_steps)
                     md.positions_save_freq = save_freq
 
                     # Create arrays for storing energy 
@@ -105,7 +105,6 @@ if __name__ == '__main__':
                         distances -= np.round(distances/md.box_size) * md.box_size
                         distance = np.linalg.norm(distances, axis=1)
                         if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
-                            print("Update!")
                             #md.compute_disk_neighbours() 
                             md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
                             #md.compute_cell_neighbours()

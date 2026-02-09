@@ -57,7 +57,7 @@ def compute_disk_neighbours_numba(num_particles, positions, box_size, cutoff, sk
 class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
-                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False):
+                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False, steps = 1e03):
         """
         This class implements a series of methods to simulate molecular dynamics with different potential types and
         different algorithms in 2D.
@@ -99,6 +99,7 @@ class MolecularDynamics:
         self.interaction = interaction
         self.potentialType = potentialType
         self.integrator = integrator
+        self.steps = steps
 
         # Potential
         if self.potentialType == "WCA" or self.potentialType == "WCAnumba":
@@ -127,13 +128,15 @@ class MolecularDynamics:
             #self.velocities = data[:, 2:]
         else:
             # Initialize positions in a grid 
-            nSide = int(np.ceil(np.sqrt(self.num_particles)))
+            nx = int(np.ceil(np.sqrt(self.num_particles * self.box_size[0] / self.box_size[1])))
+            ny = int(np.ceil(self.num_particles / nx))
             # Create grid positions
-            x = (np.arange(nSide) + 0.5) * (self.box_size[0]/nSide) - (self.box_size[0]/nSide)/2
-            y = (np.arange(nSide) + 0.5) * (self.box_size[1]/nSide) - (self.box_size[1]/nSide)/2
+            x = (np.arange(nx) + 0.5) * (self.box_size[0]/nx) - (self.box_size[0]/nx)/2
+            y = (np.arange(ny) + 0.5) * (self.box_size[1]/ny) - (self.box_size[1]/ny)/2
             xv, yv = np.meshgrid(x, y)
             positions = np.vstack([xv.ravel(), yv.ravel()]).T
-            positions = positions - (self.box_size[0]/2)*np.ones_like(positions)
+            positions[:, 0] = positions[:, 0] - (self.box_size[0]/2)*np.ones_like(positions[:, 0])
+            positions[:, 1] = positions[:, 1] - (self.box_size[1]/2)*np.ones_like(positions[:, 1])
             positions = (positions + self.box_size / 2) % self.box_size - self.box_size / 2
             self.positions = positions[:self.num_particles] # Only return the first num_particles if grid has extra points
 
