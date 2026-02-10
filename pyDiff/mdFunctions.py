@@ -468,35 +468,36 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
             popt, pcov = curve_fit(fitFunc_pow, simTime, msd) 
             plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt[0], popt[1], popt[2]), color=color, linestyle='solid', linewidth=1) 
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, fit $\propto t^{%.1f}$" %(md.num_particles, md.temperature, popt[1]))
+                label=r"T=%.2f, $\propto t^{%.1f}$" %(md.temperature, popt[1]))
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$\rho$=%.2f, T=%.1f" %(density, md.temperature))
+                label=r"T=%.1f, $\phi$=%.2f" %(md.temperature, density))
             
     elif md.integrator == 'langevin':
         if md.interaction == False:
             # Ballistic regime
+            dif = 6/eq
             if int(1/eq) > 3:
                 continuoussimTime = np.linspace(0, np.max(simTime[:int(1/eq)]), 100)
                 popt1, pcov1 = curve_fit(fitFunc_pow, simTime[:int(1/eq)], msd[:int(1/eq)]) 
-                plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt1[0], popt1[1], popt1[2]), color=color, linestyle='solid', linewidth=1) 
+                #plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt1[0], popt1[1], popt1[2]), color=color, linestyle='solid', linewidth=1) 
             # Diffusive regime
-            if int(6/eq) < 95:
-                continuoussimTime = np.linspace(np.min(simTime[int(6/eq):]), np.max(simTime[int(6/eq):]), 100)
-                popt2, pcov2 = curve_fit(fitFunc_lin, simTime[int(6/eq):], msd[int(6/eq):]) 
+            if int(dif) < 95:
+                continuoussimTime = np.linspace(np.min(simTime[int(dif):]), np.max(simTime[int(dif):]), 100)
+                popt2, pcov2 = curve_fit(fitFunc_lin, simTime[int(dif):], msd[int(dif):]) 
                 plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt2[0], popt2[1]), color=color, linestyle='solid', linewidth=1) 
             
-            if int(1/eq)>3 and int(6/eq)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, fit $\propto t^{%.1f}\rightarrow\propto %.1ft$" %(md.num_particles, md.temperature, md.gamma, popt1[1], popt2[0]))
-            elif int(6/eq)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\rightarrow\propto t$, fit $\propto %.1ft$" %(md.num_particles, md.temperature, md.gamma, popt2[0]))
+            if int(1/eq)>3 and int(dif)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto %.2ft$" %(md.num_particles, md.temperature, md.gamma, popt2[0]))
+            elif int(dif)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto %.2ft$" %(md.num_particles, md.temperature, md.gamma, popt2[0]))
             elif int(1/eq)>3: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, fit $\propto t^{%.1f}$" %(md.num_particles, md.temperature, md.gamma, popt1[1]))
+                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f" %(md.num_particles, md.temperature, md.gamma))
             else: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
                 label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\rightarrow\propto t$" %(md.num_particles, md.temperature, md.gamma))
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, md.temperature, md.gamma))
+                label=r"$\phi$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, md.temperature, md.gamma))
             
     elif md.integrator == 'em':
         # Diffusive regime at short time before the caging
@@ -504,7 +505,7 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
         popt, pcov = curve_fit(fitFunc_lin, simTime[:int(5/eq)], msd[:int(5/eq)]) 
         plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt[0], popt[1]), color=color, linestyle='solid', linewidth=1) 
         plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-            label=r"$\rho$=%.0f, T=%.1f, $\gamma$=%.1f, $D=%.1f$" %(density, md.temperature, md.gamma, popt[0]/4))
+            label=r"$\phi$=%.0f, T=%.1f, $\gamma$=%.1f, $D=%.1f$" %(density, md.temperature, md.gamma, popt[0]/4))
 
 def msdTotality(home: str, directoryList: list[str], title: str, outputName: str) -> None:
     """
@@ -533,19 +534,19 @@ def msdTotality(home: str, directoryList: list[str], title: str, outputName: str
     colCounter = 0
 
     plt.clf()
-    plt.title(title, fontsize=16)
+    #plt.title(title, fontsize=16)
     directoryList = sorted(directoryList)
 
     for directory in directoryList:
-        #print("\n", "Doing directory: ", directory, "\n")
-        
+        print("\n", "Doing directory: ", directory, "\n")
+
         msd = None
         for root, subdirectories, files in os.walk(directory):
             subdirectories.sort()
 
             # Mean between the iterations
             for subdir in subdirectories:
-                #print("Doing subdirectory: ", subdir)
+                print("Doing subdirectory: ", subdir)
 
                 loadPath = os.path.join(directory, subdir)
                 evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
@@ -562,7 +563,8 @@ def msdTotality(home: str, directoryList: list[str], title: str, outputName: str
     plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
     plt.xlabel(r"Simulation time, $t$", fontsize=14)
     plt.tight_layout()
-    plt.ylim(bottom=0.1, top=1.5*highestValue)
+    plt.ylim(bottom=0.01, top=1.5*highestValue)
+    plt.xlim(left=0.05, right=12)
     plt.xscale("log")
     plt.yscale("log")
     plt.legend()
@@ -634,11 +636,11 @@ def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str
     colCounter = 0
 
     plt.clf()
-    if graph : plt.title(title, fontsize=16)
+    #if graph : plt.title(title, fontsize=16)
     directoryList = sorted(directoryList)
 
     for directory in directoryList:
-        #print("\n", "Doing directory: ", directory, "\n")
+        print("Doing directory: ", directory)
         
         ssf_self = None
         ssf_int = None
@@ -647,7 +649,7 @@ def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str
 
             # Mean between the iterations
             for subdir in subdirectories:
-                #print("Doing subdirectory: ", subdir)
+                print("Doing subdirectory: ", subdir)
 
                 loadPath = os.path.join(directory, subdir)
                 evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
@@ -655,7 +657,7 @@ def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str
                     md = pickle.load(f)
 
                 maxSize = max(md.box_size[0], md.box_size[1])
-                kMods = np.linspace((2*np.pi/maxSize), (4*np.pi), 30)
+                kMods = np.linspace((2*np.pi/maxSize), (4*np.pi), 100)
                 unwrappedPositions = np.array(md.allUnwrappedPositions, dtype=np.float64)
                 ssf_self_temp, ssf_int_temp = compute_ssf_jit(unwrappedPositions, kMods)
                 if ssf_self is None: 
@@ -711,7 +713,7 @@ def isfPlotter(simTime: np.ndarray, isf_self: np.ndarray, isf_int: np.ndarray, m
     density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
     tau = 0
 
-    mask = (isf_self + isf_int) > 0.1
+    mask = (isf_self + isf_int) > 0.2
     continuoussimTime = np.linspace(0, np.max(simTime[mask]), 10000)
     popt, pcov = curve_fit(fitFunc_exp, simTime[mask], isf_self[mask] + isf_int[mask], maxfev=10000000, p0=[1, 2, 1, 0], bounds=([0, 0, 0, -np.inf], [np.inf, np.inf, np.inf, np.inf]))
     plt.plot(continuoussimTime, fitFunc_exp(continuoussimTime, popt[0], popt[1], popt[2], popt[3]), color=color, linewidth=1, linestyle='solid')
@@ -727,13 +729,64 @@ def isfPlotter(simTime: np.ndarray, isf_self: np.ndarray, isf_int: np.ndarray, m
     else:
         if md.interaction == False:
             plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
-                        label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(md.num_particles, md.temperature, md.gamma, chosenk, popt[2], popt[1]))
+                        label=r"$N$=%.0f, T=%.2f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(md.num_particles, md.temperature, md.gamma, chosenk, popt[2], popt[1]))
         else:
             plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
                         label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(density, md.temperature, md.gamma, chosenk, popt[2], popt[1]))
     
     return tau
-    
+
+def isfPlotter_sep(simTime: np.ndarray, isf_self: np.ndarray, isf_int: np.ndarray, md, chosenk: float, color: tuple) -> float:
+    """
+    Plot the input Intermediate Scattering Function with respect to time.
+
+    Parameters
+    ----------
+    kMods : np.ndarray
+        The magnitudes of k values to use.
+    isf_self : np.ndarray
+        ISF array of the self part.
+    isf_int : np.ndarray
+        ISF array of the interacting part.
+    md : MolecularDynamics
+        An instance of the class MolecularDynamics.
+    chosenk : float
+        The value the ISF is computed in.
+    color : tuple
+        Color of the plot.
+
+    Returns
+    ----------
+    tau : float
+        Value corresponding to the ISF fit.
+    """
+
+    density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
+    tau = 0
+
+    mask = (isf_self + isf_int) > 0.2
+    continuoussimTime = np.linspace(0, np.max(simTime[mask]), 10000)
+    popt, pcov = curve_fit(fitFunc_exp, simTime[mask], isf_self[mask] + isf_int[mask], maxfev=10000000, p0=[1, 2, 1, 0], bounds=([0, 0, 0, -np.inf], [np.inf, np.inf, np.inf, np.inf]))
+    #plt.plot(continuoussimTime, fitFunc_exp(continuoussimTime, popt[0], popt[1], popt[2], popt[3]), color=color, linewidth=1, linestyle='solid')
+    tau = popt[2]
+
+    if md.integrator == 'nve': 
+        if md.interaction == False:
+            plt.plot(simTime, isf_self, color=color, linestyle='solid', fillstyle='none', label=r"$I_{s}$")
+            plt.plot(simTime, isf_int, color=color, linestyle='dashed', fillstyle='none',label=r"$I_{int}$")
+        else:
+            plt.plot(simTime, isf_self, color=color, linestyle='solid', fillstyle='none',label=r"$I_{s}$")
+            plt.plot(simTime, isf_int, color=color, linestyle='dashed', fillstyle='none', label=r"$I_{int}$")
+    else:
+        if md.interaction == False:
+            plt.plot(simTime, isf_self, color=color, linestyle='solid', fillstyle='none', label=r"$I_{s}$")
+            plt.plot(simTime, isf_int, color=color, linestyle='dashed', fillstyle='none', label=r"$I_{int}$")
+        else:
+            plt.plot(simTime, isf_self, color=color, linestyle='solid', fillstyle='none', label=r"$I_{s}$")
+            plt.plot(simTime, isf_int, color=color,  linestyle='dashed', fillstyle='none', label=r"$I_{int}$")
+
+    return tau
+   
 def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title: str, outputName: str) -> np.ndarray:
     """
     Plot which compares different plots of the Intermediate Scattering Function with means over the iterations.
@@ -766,11 +819,11 @@ def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title:
     taus = np.zeros(len(directoryList))
 
     plt.clf()
-    plt.title(title, fontsize=16)
+    #plt.title(title, fontsize=16)
     directoryList = sorted(directoryList)
 
     for directory in directoryList:
-        #print("\n", "Doing directory: ", directory, "\n")
+        print("Doing directory: ", directory)
         
         isf_self = None
         isf_int = None
@@ -779,7 +832,7 @@ def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title:
 
             # Mean between the iterations
             for subdir in subdirectories:
-                #print("Doing subdirectory: ", subdir)
+                print("Doing subdirectory: ", subdir)
 
                 loadPath = os.path.join(directory, subdir)
                 evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
@@ -803,8 +856,8 @@ def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title:
 
     plt.ylabel(r"ISF", fontsize=14)
     plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
-    plt.xlim(left=0.1)
-    #plt.ylim(bottom=0)
+    plt.xlim(left=0.04)
+    plt.ylim(top=1)
     plt.xscale("log")
     plt.axhline(y=0, color="gray", linestyle="--")
     plt.tight_layout()
@@ -838,14 +891,14 @@ def tauPlotter(home: str, title: str, outputName: str, temperatures: np.ndarray,
     """
 
     plt.clf()
-    plt.title(title, fontsize=16)
+    #plt.title(title, fontsize=16)
     plt.plot(temperatures, taus, color=color, linestyle='solid', marker='o', markersize='4', fillstyle='none')
     plt.ylabel(r"$\tau$", fontsize=14)
     plt.xlabel(r"Temperature $T$", fontsize=14)
     plt.xscale("log")
     plt.yscale("log")
     plt.tight_layout()
-    plt.legend()
+    #plt.legend()
     plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
 
 def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
@@ -1055,11 +1108,18 @@ def sampleForces(md, directory: str) -> None:
 
 #------------------------------------WORK-IN-PROGRESS---------------------------------------
 
-def lastConfiguration(md, directory):
+def lastConfiguration(directory, perc):
+
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    step = int(np.shape(md.allPositions)[0]*perc/100)
+    if step >= np.shape(md.allPositions)[0]: step = np.shape(md.allPositions)[0]-1
+    positions = md.allPositions[step]
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    subdivision = 10
+    subdivision = 5
     plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/subdivision, step=md.box_size[0]/subdivision))
     plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/subdivision, step=md.box_size[1]/subdivision))
 
@@ -1070,7 +1130,7 @@ def lastConfiguration(md, directory):
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
 
-    if md.interaction : plt.title(r"T=%.1f, $\rho$=%.2f, $\gamma$=%.1f, $\tau_p$=%.1f, $t$=%.1f" %(md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.gamma, md.tau, md.steps*md.dt))
+    if md.interaction : plt.title(r"T=%.1f, $\rho$=%.2f, $\gamma$=%.1f, $t$=%.1f" %(md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.gamma, int(md.steps*md.dt*perc/100)))
     else : plt.title(r"N=%d, T=%.1f" %(md.num_particles, md.temperature))
     plt.xlabel("x")
     plt.ylabel("y")
