@@ -7,38 +7,42 @@ if __name__ == '__main__':
     
     start = time.time()
 
-    particles = np.array([50], dtype=int)
+    particles = np.array([1000], dtype=int)
+    densities = np.array([0.5], dtype=float)
     temperatures = np.array([1.0], dtype=float)
-    frictions = np.array([100.0], dtype=float)
-    integrators = ['langevin']
+    frictions = np.array([1.0], dtype=float)
+    integrators = ['em']
     interactions = ['WCA']
     directoryList = []
-    optionsDirectory = home + os.sep + f"{'em'}{'WCA'}_N{50:d}_T{1.0:.1f}_gamma{100.0:.2f}" 
-    directoryList.append(optionsDirectory)
+    #optionsDirectory = home + os.sep + f"{'langevin'}{'WCA'}_N{num_particles:d}_phi{0.5:.1f}_T{1.0:.1f}_g{100.0:.2f}" 
+    #directoryList.append(optionsDirectory)
 
     for ii, num_particles in enumerate(particles):
         for jj, temperature in enumerate(temperatures):
             for kk, gamma in enumerate(frictions):
-                for integrator in integrators:
-                    for interaction in interactions:
-                        
-                        optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}" 
-                        directoryList.append(optionsDirectory)
+                for ll, density in enumerate(densities):
+                    for integrator in integrators:
+                        for interaction in interactions:
+                            
+                            if interaction == "WCA": optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_phi{density:.1f}_T{temperature:.1f}_g{gamma:.2f}" 
+                            else: optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}" 
+                            directoryList.append(optionsDirectory)
 
-    directory = home + os.sep + f"{'em'}{'WCA'}_N{1000:d}_T{10.0:.1f}_gamma{0.1:.2f}" + os.sep + "iteration1"
-    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
-        md = pickle.load(f)
+    directory = directoryList[0] + os.sep + "iteration1"
+    perc = 100
+    giantIdx = cluster(directory, "gcc", start=100, stop=100, howMany=1, plot=True)
+    #configuration(directory, perc=perc, outputName=f"conf{perc}", cluIdxs=0)
+    #densitySquares(directory, num_bins=10, yDivision=10, perc=perc, outputName=f"hist{perc}")
+    #densityBands(directory, xDivision=40, perc=perc, outputName=f"dist{perc}")
 
-    #lastConfiguration(md, directory)
+    #msdTotality(home, directoryList, outputName = "msd_Newton_freevswca")
+    #kValues = ssfTotality(home, directoryList, outputName = "ssf_Lan_em", graph = True)
+    #kValues = np.array((5, 5))
+    #taus = isfTotality(home, directoryList, kValues, outputName = "isf_Lan_em")
+    #tauPlotter(home, outputName = "tau", temperatures = temperatures, taus = taus, color = "darkslategrey")
+    cvvTotality(home, directoryList, title = "", outputName = "cvv")
 
-    perc=100
-    densitySquares(md, directory, num_bins=6, yDivision=5, perc=perc)
-    densityBands(md, directory, xDivision=100, perc=perc)
-
-    #msdTotality(home, directoryList, title = "MSD", outputName = "msd")
-    #kValues = ssfTotality(home, directoryList, title = "SSF", outputName = "ssf", graph = True)
-    #taus = isfTotality(home, directoryList, kValues, title = "ISF", outputName = "isf")
-    #tauPlotter(home, r"$\tau$ with increasing $T$", "tau", temperatures, taus, "seagreen")
-    #cvvTotality(home, directoryList, title = "CVV", outputName = "cvv")
+    #densitySquares_cluster(directory, yDivision=6, perc=perc, outputName=f"cluster{perc}", plot=True)
+    #gcc_time(directory, yDivision=6, outputName=f"gcc")
 
     print("It took %fs" %(time.time()-start))

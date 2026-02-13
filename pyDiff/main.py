@@ -8,7 +8,7 @@ from scipy.optimize import curve_fit
 from mdFunctions import *
 from mdClasses import *
 #np.random.seed(0)
-# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e03 1e03 0.5 1 10 0.1 read em WCAnumba
+# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e07 1e03 0.5 3 1250 10 0 em WCAnumba
 
 if __name__ == '__main__':
 
@@ -49,8 +49,8 @@ if __name__ == '__main__':
             for kk, gamma in enumerate(frictions):
 
                 # Create the path to save the data
-                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}"
-                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_gamma{gamma:.2f}"
+                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_T{temperature:.1f}_g{gamma:.2f}"
+                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}"
 
                 for iteration in range(iterations):
 

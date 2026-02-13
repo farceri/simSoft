@@ -120,8 +120,8 @@ class MolecularDynamics:
         # Positions
         if initialConf:
             # Take the existing saved configuration from the first iteration
-            if self.interaction : optionsDirectory = f"{self.integrator}WCA_N{self.num_particles:d}_T{self.temperature:.1f}_gamma{self.gamma:.2f}"
-            else : optionsDirectory = f"{integrator}FREE_N{self.num_particles:d}_T{self.temperature:.1f}_gamma{self.gamma:.2f}"
+            if self.interaction : optionsDirectory = f"{self.integrator}WCA_N{self.num_particles:d}_phi{self.num_particles * (np.pi * (0.5)**2)/(self.box_size[0]*self.box_size[1]):.1f}_T{self.temperature:.1f}_g{self.gamma:.2f}"
+            else : optionsDirectory = f"{integrator}FREE_N{self.num_particles:d}_T{self.temperature:.1f}_g{self.gamma:.2f}"
             savePath = os.path.join(home, optionsDirectory)
             data = np.load(savePath + os.sep + 'initialConfiguration.npz')
             self.positions = data["positions"]
@@ -173,7 +173,7 @@ class MolecularDynamics:
             f"Temperature: {self.temperature:.1f}\n"
             f"Friction: {self.gamma:.1f}\n"
             f"Time step: {self.dt:.4f}\nBox size: Lx {self.box_size[0]:.1f} and Ly {self.box_size[1]:.1f}\n"
-            f"Density: {self.num_particles * np.pi * (self.sigma/2)**2 / (self.box_size[0]*self.box_size[1])}\n"
+            f"Density: {(self.num_particles * np.pi * (self.sigma/2)**2 / (self.box_size[0]*self.box_size[1])):.1f}\n"
             f"Integrator: {self.integrator}\n"
             f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
         )
@@ -297,6 +297,13 @@ class MolecularDynamics:
     def langevin_force(self):
         """Compute stochastic White Noise and friction forces."""
         noise = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.dt) * np.random.randn(self.num_particles, 2)
+        return -self.gamma * self.velocities + noise
+
+    def langevin_active_noise(self):
+        """Compute Colored Noise and friction forces."""
+        self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
+        self.directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
+        noise = self.directions * self.self.activityForce
         return -self.gamma * self.velocities + noise
 
     def velocity_verlet_nve(self):
