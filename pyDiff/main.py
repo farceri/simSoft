@@ -36,6 +36,7 @@ if __name__ == '__main__':
     else:
         load_data = False
     interaction = True
+    mixture = True
     integrator = sys.argv[9] # Options are nve, langevin and em
     potentialType = sys.argv[10] # Options are LJ, WCA and WCAnumba
 
@@ -49,14 +50,16 @@ if __name__ == '__main__':
             for kk, gamma in enumerate(frictions):
 
                 # Create the path to save the data
-                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_T{temperature:.1f}_g{gamma:.2f}"
-                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}"
+                if mixture: optionsDirectory = f"{integrator}_N{num_particles:d}_phi{packingFraction:.1f}_f1_f2_ratio"
+                else:
+                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_T{temperature:.1f}_g{gamma:.2f}"
+                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}"
 
                 for iteration in range(iterations):
 
                     # Create md object with input settings - more settings can be added
                     md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction=interaction, 
-                                           initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly, steps=num_steps)
+                                           initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly, mixture=mixture, steps=num_steps)
                     md.positions_save_freq = save_freq
 
                     # Create arrays for storing energy 

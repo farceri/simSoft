@@ -7,7 +7,7 @@ if __name__ == '__main__':
     
     start = time.time()
 
-    particles = np.array([1000], dtype=int)
+    particles = np.array([900], dtype=int)
     densities = np.array([0.5], dtype=float)
     temperatures = np.array([1.0], dtype=float)
     frictions = np.array([1.0], dtype=float)
@@ -28,9 +28,10 @@ if __name__ == '__main__':
                             else: optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}" 
                             directoryList.append(optionsDirectory)
 
-    directory = directoryList[0] + os.sep + "iteration1"
+    optionsDirectory = home + os.sep + f"{integrator}_N{num_particles:d}_phi{density:.1f}_f1_f2_ratio" 
+    directory = optionsDirectory + os.sep + "iteration1"
     perc = 100
-    giantIdx = cluster(directory, "gcc", start=100, stop=100, howMany=1, plot=True)
+    giantIdx = cluster(directory, "gcc", start=50, stop=100, howMany=5, plot=True)
     #configuration(directory, perc=perc, outputName=f"conf{perc}", cluIdxs=0)
     #densitySquares(directory, num_bins=10, yDivision=10, perc=perc, outputName=f"hist{perc}")
     #densityBands(directory, xDivision=40, perc=perc, outputName=f"dist{perc}")
@@ -40,8 +41,9 @@ if __name__ == '__main__':
     #kValues = np.array((5, 5))
     #taus = isfTotality(home, directoryList, kValues, outputName = "isf_Lan_em")
     #tauPlotter(home, outputName = "tau", temperatures = temperatures, taus = taus, color = "darkslategrey")
-    cvvTotality(home, directoryList, title = "", outputName = "cvv")
+    #cvvTotality(home, directoryList, title = "", outputName = "cvv")
 
+    #energy_graph(home=home, directory=directoryList[0])
     #densitySquares_cluster(directory, yDivision=6, perc=perc, outputName=f"cluster{perc}", plot=True)
     #gcc_time(directory, yDivision=6, outputName=f"gcc")
 

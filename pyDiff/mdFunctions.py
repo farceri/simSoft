@@ -305,11 +305,12 @@ def part_evolution(md, positions: np.ndarray, points: int = 1, step: int = 1) ->
     else : size = 20
 
     for ii in range(md.num_particles):
-        # Highlight one particle in red
-        if ii != 0: scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], 
-                                                                 s=size,facecolor='cadetblue', edgecolor="black", linewidth=0.5)
-        else: scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], 
-                                                           s=size, facecolor='firebrick', edgecolor="black", linewidth=0.5)
+        # If I want one highlighted particle
+        #if ii==0: scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=size,facecolor='limegreen', edgecolor="black", linewidth=0.5)
+        if md.activityID[ii] == 0:
+            scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.5)
+        else: 
+            scat_dic["scat{0}".format(ii)] = plt.scatter(positions[ii, 0, 0], positions[ii, 1, 0], s=size, facecolor='mediumvioletred', edgecolor="black", linewidth=0.5)
         #line_dic["line{0}".format(ii)] = plt.plot(positions[ii, 0, 0], positions[ii, 1, 0])[0]   
 
     # Gif visual setup    
@@ -430,18 +431,29 @@ def energy_graph(home: str, directory: str) -> None:
     with open(loadPath + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
 
-    plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.temperature), fontsize=16)
+    #plt.title(r"Energies for: N=%d ($\rho$=%.1f), T=%.1f" %(md.num_particles, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.temperature), fontsize=16)
     plt.plot(evolutionData[:, 0], evolutionData[:, 3], color='seagreen', linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Kinetic energy $K$")
     plt.tick_params(axis='both', labelsize=14)
     plt.plot(evolutionData[:, 0], evolutionData[:, 2], color='steelblue', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Potential energy $U$")
     plt.tick_params(axis='both', labelsize=14)
     plt.plot(evolutionData[:, 0], evolutionData[:, 2]+evolutionData[:, 3], color='orchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
     plt.tick_params(axis='both', labelsize=14)
-    plt.ylabel("Energies", fontsize=14)
-    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.ylabel("Energies", fontsize=16)
+    plt.xlabel(r"Simulation time, $t$", fontsize=16)
+    plt.ylim(top=1.5)
     plt.tight_layout()
-    plt.legend()
+    plt.legend(fontsize=13, loc="upper center", ncols=1)
     plt.savefig(home + "/energies.png", transparent=False, format="png")
+
+    plt.clf()
+    plt.plot(evolutionData[:, 0], evolutionData[:, 2]+evolutionData[:, 3], color='mediumorchid', linewidth=0.9, linestyle='solid', marker='o', markersize='1', fillstyle='none', label="Total energy $E_{tot}$")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.ylabel(r"$E_{tot}$", fontsize=16)
+    plt.xlabel(r"Simulation time, $t$", fontsize=16)
+    plt.tight_layout()
+    #plt.ylim(top=0.99999)
+    plt.legend(fontsize=13, loc="upper left")
+    plt.savefig(home + "/energiesZoom.png", transparent=False, format="png")
 
 def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
     """
@@ -1018,7 +1030,7 @@ def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str
     plt.legend()
     plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
 
-def configuration(directory, perc, outputName, cluIdxs = 0, exIdxs=0):
+def configuration(directory, perc, outputName, cluIdxs = 0, exIdxs=0, adjX=0):
 
     with open(directory + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
@@ -1037,7 +1049,6 @@ def configuration(directory, perc, outputName, cluIdxs = 0, exIdxs=0):
 
     #data = np.load(directory + os.sep + 'lastConfiguration.npz')
     #positions = data["positions"]
-    adjX = 26
     adjY = 0
 
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
@@ -1064,13 +1075,16 @@ def configuration(directory, perc, outputName, cluIdxs = 0, exIdxs=0):
     positions[:, 1] = (positions[:, 1] + md.box_size[1] / 2) % md.box_size[1] - md.box_size[1] / 2
 
     for ii in range(md.num_particles):
-        if ii not in cluIdxs:
-            plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='lightblue', edgecolor="skyblue", linewidth=0.5)
-        else:
-            if ii in exIdxs:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='brown', edgecolor="black", linewidth=0.5)
+        if md.activityID[ii] == 0:
+            if ii not in cluIdxs:
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='lightblue', edgecolor="skyblue", linewidth=0.5)
             else:
                 plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.5)
+        if md.activityID[ii] == 1:
+            if ii not in cluIdxs:
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='thistle', edgecolor="orchid", linewidth=0.5)
+            else:
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='mediumvioletred', edgecolor="black", linewidth=0.5)
 
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
@@ -1177,12 +1191,11 @@ def cluster(directory, outputName, start, stop, howMany, plot):
 
         components = list(nx.connected_components(graph))
         giant_size = max(len(cc) for cc in components) if components else 0
-        gccsize[pp] = giant_size * np.pi * (md.sigma/2)**2 / (md.box_size[0]*md.box_size[1])
+        gccsize[pp] = giant_size / md.num_particles
         giant_component = max(components, key=len)
         giant_indices = sorted(giant_component)
 
-        # Method 1
-        external = []
+        """external = []
         threshold2 = 1.5
         for ii in giant_indices:
             for jj in np.setdiff1d(range(md.num_particles), giant_indices):
@@ -1190,9 +1203,20 @@ def cluster(directory, outputName, start, stop, howMany, plot):
                 distances -= np.round(distances/md.box_size) * md.box_size
                 distance = np.linalg.norm(distances)
                 if distance < threshold2:
-                    external.append(ii)
+                    external.append(ii)"""
 
-        if plot: configuration(directory, perc=perc, outputName=f"conf{int(perc):d}", cluIdxs=giant_indices, exIdxs=external)
+        # Finding the center of the cluster:
+        sum1 = 0
+        sum2 = 0
+        for ii in giant_indices:
+            theta = 2 * np.pi * ((positions[ii, 0] + md.box_size[0]/2) % md.box_size[0]) / md.box_size[0]
+            sum1 += np.sin(theta)
+            sum2 += np.cos(theta)
+
+        center = md.box_size[0] * np.arctan2(sum1, sum2) / (2 * np.pi)
+        center = (center + md.box_size[0]/2) % md.box_size[0] - md.box_size[0]/2
+
+        if plot: configuration(directory, perc=perc, outputName=f"conf{int(perc):d}", cluIdxs=giant_indices, adjX=-center)
 
     plt.figure()
     plt.plot(percs, gccsize, color="darkslategrey")
@@ -1206,7 +1230,37 @@ def cluster(directory, outputName, start, stop, howMany, plot):
 
 #--------------------------------------OTHER-GRAPHS-----------------------------------------
 
-def forcesPotential(md, directory: str) -> None:
+def plotPotForce(directory):
+
+    epsilon = 1
+    sigma = 1
+    distw = np.linspace(0.9, 2**(1/6), 1000)
+    distl = np.linspace(0.9, 1.8, 1000)
+    dist3 = np.linspace(2**(1/6), 1.8, 1000)
+
+    plt.plot(distw, 4*epsilon*((sigma/distw)**12-(sigma/distw)**6) + epsilon, label="WCA potential", color="mediumorchid")
+    plt.plot(dist3, 0*dist3, color="mediumorchid")
+    plt.plot(distl, 4*epsilon*((sigma/distl)**12-(sigma/distl)**6), label="LJ potential", color="seagreen")
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.xlabel(r"$r_{ij}$", fontsize=16)
+    plt.ylabel(r"$U_{WCA}$", fontsize=16)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.tick_params(axis='both', labelsize=14)
+    plt.savefig(directory + "/WCApotential.png", transparent=False, format="png")
+
+    plt.clf()
+    plt.plot(distw, ((4*epsilon/distw) * ((12*(sigma/distw)**12)-(6*(sigma/distw)**6))), label="WCA force", color="orchid")
+    plt.axhline(y=0, color="gray", linestyle="--")
+    plt.xlabel(r"$r_{ij}$")
+    plt.ylabel(r"$F_{WCA}$")
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.tick_params(axis='both', labelsize=14)
+    plt.savefig(directory + "/WCAforce.png", transparent=False, format="png")
+
+
+def forcesPotential(directory: str) -> None:
     """
     Plot two graphs: one above of the used potential and one below of the theoretical force
     compared to the actual forces during the simulation.
@@ -1223,6 +1277,9 @@ def forcesPotential(md, directory: str) -> None:
     A plot of the potential and the forces.
     """
 
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
     fig, ax = plt.subplots(2, 1, figsize = (7, 7), sharex = True, dpi = 120)
     dist = np.linspace(md.sigma*0.9, md.cutoff, 1000)
     added = np.linspace(md.cutoff, md.cutoff*1.1, 1000)
@@ -1231,7 +1288,7 @@ def forcesPotential(md, directory: str) -> None:
     ax[0].axvline(x=md.cutoff, color="gray", linestyle="--")
     ax[1].axhline(y=0, color="gray", linestyle="--")
     ax[1].axvline(x=md.cutoff, color="gray", linestyle="--")
-    if md.potentialType == "WCA":
+    if md.potentialType == "WCA" or md.potentialType == "WCAnumba":
         ax[0].plot(dist, 4*md.epsilon*((md.sigma/dist)**12-(md.sigma/dist)**6) + md.epsilon, label="WCA potential", color="orchid")
         ax[0].plot(added, 0*added, color="orchid")
         ax[1].plot(dist, ((4*md.epsilon/dist) * ((12*(md.sigma/dist)**12)-(6*(md.sigma/dist)**6))), label="WCA force", color="orchid")

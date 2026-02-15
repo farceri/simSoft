@@ -57,7 +57,7 @@ def compute_disk_neighbours_numba(num_particles, positions, box_size, cutoff, sk
 class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
-                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False, steps = 1e03):
+                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False, mixture = False, steps = 1e03):
         """
         This class implements a series of methods to simulate molecular dynamics with different potential types and
         different algorithms in 2D.
@@ -92,11 +92,12 @@ class MolecularDynamics:
 
         # Initialization from input
         self.num_particles = num_particles
-        self.dt = dt
+        self.dt = dt 
         self.gamma = gamma 
         self.temperature = temperature
         self.box_size = np.array([Lx, Ly])
         self.interaction = interaction
+        self.mixture = mixture
         self.potentialType = potentialType
         self.integrator = integrator
         self.steps = steps
@@ -152,9 +153,19 @@ class MolecularDynamics:
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
         self.tau = 10
-        self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
+        #self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
         self.directions = np.zeros((self.num_particles, 2))
+        self.ratio = 10
+        # ID system to assign activity value for the mixture
+        #self.activityForce = np.full(self.num_particles, np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau))
+        self.activityForce = np.full(self.num_particles, 5 * self.gamma)
+        self.activityID = np.zeros(self.num_particles)
+        if self.mixture:
+            for ii in range(num_particles):
+                if (ii % 2) == 0: self.activityID[ii] = 1
+                else: self.activityID[ii] = 0
+            self.activityForce[(self.activityID == 1)] = self.activityForce[0]*self.ratio
         # Other checks
         self.forcesContainer = []
         self.allforcesContainer = []
@@ -353,9 +364,11 @@ class MolecularDynamics:
                 self.compute_LJ_forces()   
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
         self.directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
-        self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
+        #self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
+        self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce[:, None] / self.gamma) * self.directions * self.dt
         self.apply_pbc()
-        self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
+        #self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
+        self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce[:, None] / self.gamma) * self.directions * self.dt
 
     def compute_potentialenergy(self):
         """Compute the potential energy of the system."""
