@@ -1141,20 +1141,27 @@ def densityBands(directory, xDivision, perc, outputName):
 
     x = -md.box_size[0]/2
 
-    density = np.zeros((xDivision), dtype=int)
     positions[:, 0] += adjX
     positions[:, 0] = (positions[:, 0] + md.box_size[0] / 2) % md.box_size[0] - md.box_size[0] / 2
 
+    plt.figure()
+
+    density = np.zeros((xDivision), dtype=int)
+    density2 = np.zeros((xDivision), dtype=int)
     for ii in range(xDivision):
         for particle in range(md.num_particles):
-            if (x <= positions[particle, 0] < x + sideBands):
-                density[ii] += 1
+            if md.particleID[ii]==0:
+                if (x <= positions[particle, 0] < x + sideBands):
+                    density[ii] += 1
+            if md.particleID[ii]==1:
+                if (x <= positions[particle, 0] < x + sideBands):
+                    density2[ii] += 1
         x += sideBands
-
     density = density*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
+    density2 = density2*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
+    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey", label="ID=0")
+    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color="orchid", label="ID=1")
 
-    plt.figure()
-    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey")
     plt.xlabel(r"$L_x$")
     plt.ylabel(r"$\phi$")
     plt.tight_layout()
@@ -1213,8 +1220,8 @@ def cluster(directory, outputName, start, stop, howMany, plot):
             sum1 += np.sin(theta)
             sum2 += np.cos(theta)
 
-        center = md.box_size[0] * np.arctan2(sum1, sum2) / (2 * np.pi)
-        center = (center + md.box_size[0]/2) % md.box_size[0] - md.box_size[0]/2
+        center = md.box_size[0] * np.arctan(sum1 / sum2) / (2 * np.pi)
+        center = (center + md.box_size[0]/2) % md.box_size[0] 
 
         if plot: configuration(directory, perc=perc, outputName=f"conf{int(perc):d}", cluIdxs=giant_indices, adjX=-center)
 
@@ -1227,6 +1234,48 @@ def cluster(directory, outputName, start, stop, howMany, plot):
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
     return giant_indices
+
+def centerDistance(positions, center, Lx, directory, outputName):
+
+    distances = positions[:, 0] - center
+    distances = (distances + Lx/2) % Lx - Lx/2
+
+    plt.figure()
+    plt.hist(distances, bins=50, density=True, color="darkslategrey")
+    plt.xlabel(r"distance")
+    plt.ylabel(r"P")
+    plt.tight_layout()
+    #plt.legend()
+    plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
+
+def computeTemperatureTemp(directory, cluIdxs):
+
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    velocities = (md.lastPositions[-1] - md.lastPositions[-2])/md.dt
+    mask = np.ones(md.num_particles, dtype=bool)
+    mask[cluIdxs] = False
+
+    velCluster = 0.5 * np.sum(velocities[cluIdxs] ** 2) / len(cluIdxs)
+    velGas = 0.5 * np.sum(velocities[mask] ** 2) / (md.num_particles - len(cluIdxs))
+
+    print("The mean temperature in the cluster: ", velCluster)
+    print("The mean temperature in the gas: ", velGas)
+
+def computeTemperature(directory, cluIdxs):
+
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    mask = np.ones(md.num_particles, dtype=bool)
+    mask[cluIdxs] = False
+
+    velCluster = 0.5 * np.sum(md.velocities[cluIdxs] ** 2) / len(cluIdxs)
+    velGas = 0.5 * np.sum(md.velocities[mask] ** 2) / (md.num_particles - len(cluIdxs))
+
+    print("The mean velocity in the cluster: ", velCluster)
+    print("The mean velocity in the gas: ", velGas)
 
 #--------------------------------------OTHER-GRAPHS-----------------------------------------
 
@@ -1258,7 +1307,6 @@ def plotPotForce(directory):
     plt.tight_layout()
     plt.tick_params(axis='both', labelsize=14)
     plt.savefig(directory + "/WCAforce.png", transparent=False, format="png")
-
 
 def forcesPotential(directory: str) -> None:
     """

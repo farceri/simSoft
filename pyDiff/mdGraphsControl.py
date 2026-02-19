@@ -7,14 +7,15 @@ if __name__ == '__main__':
     
     start = time.time()
 
-    particles = np.array([900], dtype=int)
+    particles = np.array([800], dtype=int)
     densities = np.array([0.5], dtype=float)
     temperatures = np.array([1.0], dtype=float)
-    frictions = np.array([1.0], dtype=float)
+    frictions = np.array([10.0], dtype=float)
     integrators = ['em']
     interactions = ['WCA']
+    mixture = ['False']
     directoryList = []
-    #optionsDirectory = home + os.sep + f"{'langevin'}{'WCA'}_N{num_particles:d}_phi{0.5:.1f}_T{1.0:.1f}_g{100.0:.2f}" 
+    #optionsDirectory = home + os.sep + f"{'em'}{'WCA'}_N{800:d}_phi{0.5:.1f}_T{1.0:.1f}_g{10.0:.2f}_mixFalse" 
     #directoryList.append(optionsDirectory)
 
     for ii, num_particles in enumerate(particles):
@@ -28,10 +29,10 @@ if __name__ == '__main__':
                             else: optionsDirectory = home + os.sep + f"{integrator}{interaction}_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}" 
                             directoryList.append(optionsDirectory)
 
-    optionsDirectory = home + os.sep + f"{integrator}_N{num_particles:d}_phi{density:.1f}_f1_f2_ratio" 
-    directory = optionsDirectory + os.sep + "iteration1"
-    perc = 100
-    giantIdx = cluster(directory, "gcc", start=50, stop=100, howMany=5, plot=True)
+    directory = home + os.sep + f"tau_20.0_{'langevin'}{'WCA'}_N{1000:d}_phi{0.5:.1f}_T{1.0:.1f}_g{10:.2f}_mixFalse" + os.sep + "iteration1"
+    print(directory)
+    giantIdx = cluster(directory, "gcc", start=100, stop=100, howMany=1, plot=True)
+    computeTemperature(directory, cluIdxs=giantIdx)
     #configuration(directory, perc=perc, outputName=f"conf{perc}", cluIdxs=0)
     #densitySquares(directory, num_bins=10, yDivision=10, perc=perc, outputName=f"hist{perc}")
     #densityBands(directory, xDivision=40, perc=perc, outputName=f"dist{perc}")

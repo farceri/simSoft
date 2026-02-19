@@ -57,7 +57,8 @@ def compute_disk_neighbours_numba(num_particles, positions, box_size, cutoff, sk
 class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
-                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False, mixture = False, steps = 1e03):
+                 dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False, mixture = False, steps = 1e03, 
+                 tau = 10, ratio = 1, activity = 5, active = False):
         """
         This class implements a series of methods to simulate molecular dynamics with different potential types and
         different algorithms in 2D.
@@ -101,6 +102,10 @@ class MolecularDynamics:
         self.potentialType = potentialType
         self.integrator = integrator
         self.steps = steps
+        self.tau = tau
+        self.ratio = ratio
+        self.activity = activity
+        self.active = active
 
         # Potential
         if self.potentialType == "WCA" or self.potentialType == "WCAnumba":
@@ -121,8 +126,8 @@ class MolecularDynamics:
         # Positions
         if initialConf:
             # Take the existing saved configuration from the first iteration
-            if self.interaction : optionsDirectory = f"{self.integrator}WCA_N{self.num_particles:d}_phi{self.num_particles * (np.pi * (0.5)**2)/(self.box_size[0]*self.box_size[1]):.1f}_T{self.temperature:.1f}_g{self.gamma:.2f}"
-            else : optionsDirectory = f"{integrator}FREE_N{self.num_particles:d}_T{self.temperature:.1f}_g{self.gamma:.2f}"
+            if interaction : optionsDirectory = f"tau_{tau:d}_{integrator}WCA_N{num_particles:d}_phi{(num_particles*(self.sigma)**2/(self.box_size[0]*self.box_size[1])):.1f}_T{temperature:.1f}_g{gamma:.2f}_mix{mixture}"
+            else : optionsDirectory = f"tau_{tau:d}_{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}_mix{mixture}"
             savePath = os.path.join(home, optionsDirectory)
             data = np.load(savePath + os.sep + 'initialConfiguration.npz')
             self.positions = data["positions"]
@@ -152,14 +157,12 @@ class MolecularDynamics:
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
-        self.tau = 10
         #self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
         self.directions = np.zeros((self.num_particles, 2))
-        self.ratio = 10
         # ID system to assign activity value for the mixture
         #self.activityForce = np.full(self.num_particles, np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau))
-        self.activityForce = np.full(self.num_particles, 5 * self.gamma)
+        self.activityForce = np.full(self.num_particles, self.activity)
         self.activityID = np.zeros(self.num_particles)
         if self.mixture:
             for ii in range(num_particles):
@@ -170,6 +173,7 @@ class MolecularDynamics:
         self.forcesContainer = []
         self.allforcesContainer = []
         self.distancesContainer = []
+        self.lastTwopositions = []
         self.positions_save_freq = 1000
 
         # Print the class instance
@@ -186,6 +190,10 @@ class MolecularDynamics:
             f"Time step: {self.dt:.4f}\nBox size: Lx {self.box_size[0]:.1f} and Ly {self.box_size[1]:.1f}\n"
             f"Density: {(self.num_particles * np.pi * (self.sigma/2)**2 / (self.box_size[0]*self.box_size[1])):.1f}\n"
             f"Integrator: {self.integrator}\n"
+            f"Activity: {self.active}\n"
+            f"Mixture: {self.mixture}\n"
+            f"Tau: {self.tau}\n"
+            f"V0: {self.activity / self.gamma}\n"
             f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
         )
 
@@ -314,8 +322,10 @@ class MolecularDynamics:
         """Compute Colored Noise and friction forces."""
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
         self.directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
-        noise = self.directions * self.self.activityForce
-        return -self.gamma * self.velocities + noise
+        coloredNoise = self.directions * self.activityForce[:, None]
+        whiteNoise = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.dt) * np.random.randn(self.num_particles, 2)
+        return -self.gamma * self.velocities + coloredNoise
+        #return -self.gamma * self.velocities + whiteNoise + coloredNoise
 
     def velocity_verlet_nve(self):
         """Velocity Verlet integration for NVE dynamics."""
@@ -349,7 +359,8 @@ class MolecularDynamics:
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()
         else : self.forces = np.zeros((self.num_particles, 2))
-        self.forces += self.langevin_force()
+        if self.active : self.forces += self.langevin_active_noise()
+        else : self.forces += self.langevin_force()
         self.velocities += 0.5 * self.forces / self.mass * self.dt
 
     def euler_maruyama(self):
