@@ -126,8 +126,16 @@ class MolecularDynamics:
         # Positions
         if initialConf:
             # Take the existing saved configuration from the first iteration
-            if interaction : optionsDirectory = f"tau_{tau:d}_{integrator}WCA_N{num_particles:d}_phi{(num_particles*(self.sigma)**2/(self.box_size[0]*self.box_size[1])):.1f}_T{temperature:.1f}_g{gamma:.2f}_mix{mixture}"
-            else : optionsDirectory = f"tau_{tau:d}_{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}_mix{mixture}"
+            if active: 
+                if mixture:
+                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{0.5:.1f}_tau{tau:.1f}_v01{(self.activity/self.gamma):.1f}_v02{(self.ratio*self.activity/self.gamma):.1f}_g{gamma:.2f}"
+                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v01{(self.activity/self.gamma):.1f}_v02{(self.ratio*self.activity/self.gamma):.1f}_g{gamma:.2f}"
+                else:
+                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{0.5:.1f}_tau{tau:.1f}_v0{(self.activity/self.gamma):.1f}_g{gamma:.2f}"
+                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v0{(self.activity/self.gamma):.1f}_g{gamma:.2f}"
+            else:
+                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{0.5:.1f}_T{temperature:.1f}_g{gamma:.2f}"
+                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}"
             savePath = os.path.join(home, optionsDirectory)
             data = np.load(savePath + os.sep + 'initialConfiguration.npz')
             self.positions = data["positions"]
@@ -168,7 +176,8 @@ class MolecularDynamics:
             for ii in range(num_particles):
                 if (ii % 2) == 0: self.activityID[ii] = 1
                 else: self.activityID[ii] = 0
-            self.activityForce[(self.activityID == 1)] = self.activityForce[0]*self.ratio
+            self.activityForce[(self.activityID == 1)] = self.activity*self.ratio
+        self.inactive = (self.activityForce == 0)
         # Other checks
         self.forcesContainer = []
         self.allforcesContainer = []
@@ -191,9 +200,11 @@ class MolecularDynamics:
             f"Density: {(self.num_particles * np.pi * (self.sigma/2)**2 / (self.box_size[0]*self.box_size[1])):.1f}\n"
             f"Integrator: {self.integrator}\n"
             f"Activity: {self.active}\n"
-            f"Mixture: {self.mixture}\n"
-            f"Tau: {self.tau}\n"
-            f"V0: {self.activity / self.gamma}\n"
+            f"{(f"Mixture: {self.mixture}\n") if self.active else ""}"
+            f"{(f"Tau: {self.tau}\n") if self.active else ""}"
+            f"{(f"V0: {self.activity / self.gamma}\n") if (self.active and (not self.mixture)) else ""}"
+            f"{(f"V01: {self.activity / self.gamma}\n") if self.mixture else ""}"
+            f"{(f"V02: {self.ratio * self.activity / self.gamma}\n") if self.mixture else ""}"
             f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
         )
 
@@ -375,11 +386,15 @@ class MolecularDynamics:
                 self.compute_LJ_forces()   
         self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
         self.directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
+        whiteNoise = (self.activity / self.gamma) * np.random.randn(self.num_particles, 2)
         #self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
         self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce[:, None] / self.gamma) * self.directions * self.dt
+        self.positions[self.inactive] += whiteNoise[self.inactive] * self.dt
         self.apply_pbc()
+        temp = self.unwrappedPositions.copy()
         #self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
         self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce[:, None] / self.gamma) * self.directions * self.dt
+        self.velocities = (self.unwrappedPositions - temp)/self.dt
 
     def compute_potentialenergy(self):
         """Compute the potential energy of the system."""

@@ -943,7 +943,7 @@ def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
     continuoussimTime = np.linspace(0, np.max(simTime[mask]), 10000)
 
     popt, pcov = curve_fit(fitFunc_exp, simTime[mask], cvv[mask], maxfev=100000, p0=[1, 2, 1, 0])
-    plt.plot(continuoussimTime, fitFunc_exp(continuoussimTime, popt[0], popt[1], popt[2], popt[3]), color=color, linewidth=1, linestyle='solid')
+    #plt.plot(continuoussimTime, fitFunc_exp(continuoussimTime, popt[0], popt[1], popt[2], popt[3]), color=color, linewidth=1, linestyle='solid')
     tau = popt[2]
 
     if md.integrator == 'nve': 
@@ -955,11 +955,9 @@ def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
                         label=r"$\rho$=%.2f, T=%.1f, $\propto e^{-((t-t_0)/%.2f)^{%.3f}}$" %(density, md.temperature, popt[2], popt[1]))
     else:
         if md.interaction == False:
-            plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
-                        label=r"$N$=%.0f, T=%.0f, $\gamma$=%.1f, $\propto e^{-((t-t_0)/%.3f)^{%.1f}}$" %(md.num_particles, md.temperature, md.gamma, popt[2], popt[1]))
+            plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none')
         else:
-            plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
-                        label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $\propto e^{-((t-t_0)/%.3f)^{%.1f}}$" %(density, md.temperature, md.gamma, popt[2], popt[1]))
+            plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none')
 
     return tau
 
@@ -1022,15 +1020,15 @@ def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str
 
     plt.ylabel(r"$C_{vv}$", fontsize=14)
     plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
-    plt.xlim(left=0.01)
+    plt.xlim(left=0.04)
     #plt.ylim(bottom=0)
     plt.xscale("log")
     plt.axhline(y=0, color="gray", linestyle="--")
     plt.tight_layout()
-    plt.legend()
+    #plt.legend()
     plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
 
-def configuration(directory, perc, outputName, cluIdxs = 0, exIdxs=0, adjX=0):
+def configuration(directory, perc, outputName, cluIdxs = 0, adjX=0):
 
     with open(directory + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
@@ -1082,9 +1080,9 @@ def configuration(directory, perc, outputName, cluIdxs = 0, exIdxs=0, adjX=0):
                 plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.5)
         if md.activityID[ii] == 1:
             if ii not in cluIdxs:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='thistle', edgecolor="orchid", linewidth=0.5)
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='thistle', edgecolor="violet", linewidth=0.5)
             else:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='mediumvioletred', edgecolor="black", linewidth=0.5)
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='hotpink', edgecolor="black", linewidth=0.5)
 
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
@@ -1102,36 +1100,49 @@ def densitySquares(directory, num_bins, yDivision, perc, outputName):
     x = -md.box_size[0]/2
     y = -md.box_size[1]/2
 
-    density = np.zeros((yDivision * int(md.box_size[0] / md.box_size[1]), yDivision), dtype=int)
+    density1 = np.zeros((yDivision * int(md.box_size[0] / md.box_size[1]), yDivision), dtype=int)
+    density2 = np.zeros((yDivision * int(md.box_size[0] / md.box_size[1]), yDivision), dtype=int)
 
     for ii in range(yDivision):
         x = -md.box_size[0]/2
         for jj in range(yDivision * int(md.box_size[0] / md.box_size[1])):
             for particle in range(md.num_particles):
-                if (x <= positions[particle, 0] < x + sideSquares) and (y <= positions[particle, 1] < y + sideSquares):
-                    density[jj, ii] += 1
+                if md.activityID[particle]==0:
+                    if (x <= positions[particle, 0] < x + sideSquares) and (y <= positions[particle, 1] < y + sideSquares):
+                        density1[jj, ii] += 1
+                if md.activityID[particle]==1:
+                    if (x <= positions[particle, 0] < x + sideSquares) and (y <= positions[particle, 1] < y + sideSquares):
+                        density2[jj, ii] += 1
             x += sideSquares
         y += sideSquares
 
-    density = density*(np.pi*(0.5)**2)/sideSquares**2
-    dens = density.ravel() 
-
-    hist, bin_edges = np.histogram(dens, bins=num_bins, density=True)  
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    density1 = density1*(np.pi*(0.5)**2)/sideSquares**2
+    dens1 = density1.ravel() 
+    density2 = density2*(np.pi*(0.5)**2)/sideSquares**2
+    dens2 = density2.ravel() 
 
     plt.figure()
-    plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey")
+    if md.mixture: 
+        hist, bin_edges = np.histogram(dens2, bins=num_bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="orchid", alpha=1, label=f"v0={md.activity*md.ratio/md.gamma}")
+        hist, bin_edges = np.histogram(dens1, bins=num_bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=0.7, label=f"v0={md.activity/md.gamma}")
+    else:
+        hist, bin_edges = np.histogram(dens1, bins=num_bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=1, label=f"v0={md.activity/md.gamma}")
     plt.xlabel(r"$\phi$")
     plt.ylabel(r"$P(\phi)$")
     plt.tight_layout()
-    #plt.legend()
+    plt.legend()
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
-def densityBands(directory, xDivision, perc, outputName):
+def densityBands(directory, xDivision, perc, outputName, adjX):
 
     with open(directory + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
-    adjX = 26
 
     step = int(np.shape(md.allPositions)[0]*perc/100)
     if step >= np.shape(md.allPositions)[0]: step = np.shape(md.allPositions)[0]-1
@@ -1150,25 +1161,25 @@ def densityBands(directory, xDivision, perc, outputName):
     density2 = np.zeros((xDivision), dtype=int)
     for ii in range(xDivision):
         for particle in range(md.num_particles):
-            if md.particleID[ii]==0:
+            if md.activityID[particle]==0:
                 if (x <= positions[particle, 0] < x + sideBands):
                     density[ii] += 1
-            if md.particleID[ii]==1:
+            elif md.activityID[particle]==1:
                 if (x <= positions[particle, 0] < x + sideBands):
                     density2[ii] += 1
         x += sideBands
     density = density*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
     density2 = density2*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
-    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey", label="ID=0")
-    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color="orchid", label="ID=1")
+    if md.mixture: plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color="orchid", label=f"v0={md.activity*md.ratio/md.gamma}")
+    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey", label=f"v0={md.activity/md.gamma}")
 
     plt.xlabel(r"$L_x$")
     plt.ylabel(r"$\phi$")
     plt.tight_layout()
-    #plt.legend()
+    plt.legend()
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
-def cluster(directory, outputName, start, stop, howMany, plot):
+def cluster(directory, outputName, start, stop, howMany, plot, densityStudies):
 
     percs = np.linspace(start, stop, howMany)
     gccsize = np.zeros(np.shape(percs)[0])
@@ -1216,14 +1227,17 @@ def cluster(directory, outputName, start, stop, howMany, plot):
         sum1 = 0
         sum2 = 0
         for ii in giant_indices:
-            theta = 2 * np.pi * ((positions[ii, 0] + md.box_size[0]/2) % md.box_size[0]) / md.box_size[0]
+            theta = 2 * np.pi * (positions[ii, 0] + md.box_size[0]/2) / md.box_size[0]
             sum1 += np.sin(theta)
             sum2 += np.cos(theta)
 
-        center = md.box_size[0] * np.arctan(sum1 / sum2) / (2 * np.pi)
-        center = (center + md.box_size[0]/2) % md.box_size[0] 
+        center = (md.box_size[0] * (np.arctan2(sum1, sum2)) / (2 * np.pi)) % md.box_size[0] - md.box_size[0]/2
+        print("Cluster size: ", len(giant_indices)/md.num_particles)
 
         if plot: configuration(directory, perc=perc, outputName=f"conf{int(perc):d}", cluIdxs=giant_indices, adjX=-center)
+        if densityStudies: 
+            densityBands(directory, xDivision=10, perc=perc, outputName=f"bands{int(perc):d}", adjX=-center)
+            densitySquares(directory, num_bins=10, yDivision=5, perc=perc, outputName=f"squares{int(perc):d}")
 
     plt.figure()
     plt.plot(percs, gccsize, color="darkslategrey")
@@ -1248,34 +1262,23 @@ def centerDistance(positions, center, Lx, directory, outputName):
     #plt.legend()
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
-def computeTemperatureTemp(directory, cluIdxs):
+def computeTemperature(directory, perc, cluIdxs):
 
     with open(directory + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
 
-    velocities = (md.lastPositions[-1] - md.lastPositions[-2])/md.dt
+    step = int(np.shape(md.allVelocities)[0]*perc/100)
+    if step >= np.shape(md.allVelocities)[0]: step = np.shape(md.allVelocities)[0]-1
+    velocities = md.allVelocities[step]
+
     mask = np.ones(md.num_particles, dtype=bool)
     mask[cluIdxs] = False
 
     velCluster = 0.5 * np.sum(velocities[cluIdxs] ** 2) / len(cluIdxs)
     velGas = 0.5 * np.sum(velocities[mask] ** 2) / (md.num_particles - len(cluIdxs))
 
-    print("The mean temperature in the cluster: ", velCluster)
-    print("The mean temperature in the gas: ", velGas)
-
-def computeTemperature(directory, cluIdxs):
-
-    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
-        md = pickle.load(f)
-
-    mask = np.ones(md.num_particles, dtype=bool)
-    mask[cluIdxs] = False
-
-    velCluster = 0.5 * np.sum(md.velocities[cluIdxs] ** 2) / len(cluIdxs)
-    velGas = 0.5 * np.sum(md.velocities[mask] ** 2) / (md.num_particles - len(cluIdxs))
-
-    print("The mean velocity in the cluster: ", velCluster)
-    print("The mean velocity in the gas: ", velGas)
+    print("Cluster kinetic T: ", velCluster)
+    print("Gas kinetic T: ", velGas)
 
 #--------------------------------------OTHER-GRAPHS-----------------------------------------
 
