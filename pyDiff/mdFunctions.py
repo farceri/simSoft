@@ -42,6 +42,10 @@ def fitFunc_exp(xx: float, a: float, b: float, c: float, d: float) -> float:
     """Return the value a*e^(-(x/c)**b) + d."""
     return a * np.exp(-((xx/c)**b)) + d
 
+def fitFunc_exp_one(xx: float, a: float, b: float, c: float) -> float:
+    """Return the value a*e^(-(x/c)) + b."""
+    return a * np.exp(-((xx/c))) + b
+
 #--------------------------------------OBSERVABLES------------------------------------------
 
 def compute_msd(positions: np.ndarray) -> np.ndarray:
@@ -942,9 +946,10 @@ def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
     mask = (cvv) > 0.2
     continuoussimTime = np.linspace(0, np.max(simTime[mask]), 10000)
 
-    popt, pcov = curve_fit(fitFunc_exp, simTime[mask], cvv[mask], maxfev=100000, p0=[1, 2, 1, 0])
+    popt, pcov = curve_fit(fitFunc_exp_one, simTime[mask], cvv[mask], maxfev=100000, p0=[1, 0, 6])
     #plt.plot(continuoussimTime, fitFunc_exp(continuoussimTime, popt[0], popt[1], popt[2], popt[3]), color=color, linewidth=1, linestyle='solid')
     tau = popt[2]
+    print(tau)
 
     if md.integrator == 'nve': 
         if md.interaction == False:
@@ -957,8 +962,9 @@ def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
         if md.interaction == False:
             plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none')
         else:
-            plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none')
-
+            if md.integrator=="em" : plt.plot(simTime, cvv, color=color, marker='o', markersize='3', label="EM", linestyle='none', fillstyle='none')
+            if md.integrator=="langevin" : plt.plot(simTime, cvv, color=color, marker='o', markersize='3', label="Langevin VV", linestyle='none', fillstyle='none')
+            
     return tau
 
 def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str) -> np.ndarray:
@@ -995,7 +1001,7 @@ def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str
     directoryList = sorted(directoryList)
 
     for directory in directoryList:
-        #print("\n", "Doing directory: ", directory, "\n")
+        print("\n", "Doing directory: ", directory, "\n")
         
         cvv = None
         for root, subdirectories, files in os.walk(directory):
@@ -1003,7 +1009,7 @@ def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str
 
             # Mean between the iterations
             for subdir in subdirectories:
-                #print("Doing subdirectory: ", subdir)
+                print("Doing subdirectory: ", subdir)
 
                 loadPath = os.path.join(directory, subdir)
                 evolutionData = np.loadtxt(loadPath + os.sep + 'evolutionData.dat')
@@ -1018,14 +1024,14 @@ def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str
         colCounter += 1
         dirCounter += 1
 
-    plt.ylabel(r"$C_{vv}$", fontsize=14)
+    plt.ylabel(r"$C_{v}$", fontsize=14)
     plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
     plt.xlim(left=0.04)
     #plt.ylim(bottom=0)
     plt.xscale("log")
     plt.axhline(y=0, color="gray", linestyle="--")
     plt.tight_layout()
-    #plt.legend()
+    plt.legend()
     plt.savefig(home + f"/{outputName}.png", transparent=False, format="png")
 
 def configuration(directory, perc, outputName, cluIdxs = 0, adjX=0):
@@ -1039,11 +1045,11 @@ def configuration(directory, perc, outputName, cluIdxs = 0, adjX=0):
 
     if cluIdxs == 0: cluIdxs = np.arange(0, md.num_particles)
 
-    fig = plt.figure()
+    fig = plt.figure(dpi=300)
     ax = fig.add_subplot(111)
     subdivision = 5
-    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/subdivision, step=md.box_size[0]/subdivision))
-    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/subdivision, step=md.box_size[1]/subdivision))
+    plt.xticks(np.arange(-md.box_size[0]/2, md.box_size[0]/2 + md.box_size[0]/subdivision, step=md.box_size[0]/subdivision), fontsize=8)
+    plt.yticks(np.arange(-md.box_size[1]/2, md.box_size[1]/2 + md.box_size[1]/subdivision, step=md.box_size[1]/subdivision), fontsize=8)
 
     #data = np.load(directory + os.sep + 'lastConfiguration.npz')
     #positions = data["positions"]
@@ -1052,19 +1058,28 @@ def configuration(directory, perc, outputName, cluIdxs = 0, adjX=0):
     plt.xlim([-md.box_size[0]/2, md.box_size[0]/2])
     plt.ylim([-md.box_size[1]/2, md.box_size[1]/2])
 
-    if md.interaction : plt.title(r"T=%.1f, $\rho$=%.2f, $\gamma$=%.1f, $t$=%.1f" %(md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.gamma, int(md.steps*md.dt*perc/100)))
-    else : plt.title(r"N=%d, T=%.1f" %(md.num_particles, md.temperature))
-    plt.xlabel("x")
-    plt.ylabel("y")
+    #if md.interaction : plt.title(r"T=%.1f, $\rho$=%.2f, $\gamma$=%.1f, $t$=%.1f" %(md.temperature, (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1]), md.gamma, int(md.steps*md.dt*perc/100)))
+    #else : plt.title(r"N=%d, T=%.1f" %(md.num_particles, md.temperature))
+    plt.xlabel("x", fontsize=12)
+    plt.ylabel("y", fontsize=12)
     plt.gca().set_aspect('equal')
 
     radius = md.sigma/2
+    """
     trans = ax.transData.transform
     inv = fig.dpi_scale_trans.inverted().transform  
     x0, y0 = trans((0,0))
     x1, y1 = trans((radius, 0))
     radius_pixels = x1 - x0
     if md.interaction : size = radius_pixels**2
+    else : size = 20ù
+    """
+
+    x0, _ = ax.transData.transform((0, 0))
+    x1, _ = ax.transData.transform((radius, 0))
+    radius_pixels = x1 - x0
+    radius_points = radius_pixels * 72 / fig.dpi
+    if md.interaction : size = np.pi * radius_points**2
     else : size = 20
 
     positions[:, 0] += adjX
@@ -1075,14 +1090,14 @@ def configuration(directory, perc, outputName, cluIdxs = 0, adjX=0):
     for ii in range(md.num_particles):
         if md.activityID[ii] == 0:
             if ii not in cluIdxs:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='lightblue', edgecolor="skyblue", linewidth=0.5)
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='lightblue', edgecolor="skyblue", linewidth=0.3)
             else:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.5)
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.3)
         if md.activityID[ii] == 1:
             if ii not in cluIdxs:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='thistle', edgecolor="violet", linewidth=0.5)
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='thistle', edgecolor="violet", linewidth=0.3)
             else:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='hotpink', edgecolor="black", linewidth=0.5)
+                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='mediumorchid', edgecolor="black", linewidth=0.3)
 
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
@@ -1125,16 +1140,16 @@ def densitySquares(directory, num_bins, yDivision, perc, outputName):
     if md.mixture: 
         hist, bin_edges = np.histogram(dens2, bins=num_bins, density=True)  
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="orchid", alpha=1, label=f"v0={md.activity*md.ratio/md.gamma}")
+        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="orchid", alpha=1, label=rf"$\tau_p$={md.tau*0}")
         hist, bin_edges = np.histogram(dens1, bins=num_bins, density=True)  
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=0.7, label=f"v0={md.activity/md.gamma}")
+        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=0.7, label=rf"$\tau_p$={md.tau}")
     else:
         hist, bin_edges = np.histogram(dens1, bins=num_bins, density=True)  
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=1, label=f"v0={md.activity/md.gamma}")
-    plt.xlabel(r"$\phi$")
-    plt.ylabel(r"$P(\phi)$")
+        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=1, label=rf"$\tau_p$={md.tau}")
+    plt.xlabel(r"$\phi_s$", fontsize=14)
+    plt.ylabel(r"$P(\phi_s)$", fontsize=14)
     plt.tight_layout()
     plt.legend()
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
@@ -1170,12 +1185,13 @@ def densityBands(directory, xDivision, perc, outputName, adjX):
         x += sideBands
     density = density*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
     density2 = density2*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
-    if md.mixture: plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color="orchid", label=f"v0={md.activity*md.ratio/md.gamma}")
-    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey", label=f"v0={md.activity/md.gamma}")
+    if md.mixture: plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color="orchid", label=rf"$\tau_p$={md.tau*0}")
+    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey", label=rf"$\tau_p$={md.tau}")
 
-    plt.xlabel(r"$L_x$")
-    plt.ylabel(r"$\phi$")
+    plt.xlabel(r"$L_x$", fontsize=14)
+    plt.ylabel(r"$\phi_b$", fontsize=14)
     plt.tight_layout()
+    #plt.ylim(bottom=0.11, top=0.9)
     plt.legend()
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
@@ -1236,13 +1252,13 @@ def cluster(directory, outputName, start, stop, howMany, plot, densityStudies):
 
         if plot: configuration(directory, perc=perc, outputName=f"conf{int(perc):d}", cluIdxs=giant_indices, adjX=-center)
         if densityStudies: 
-            densityBands(directory, xDivision=10, perc=perc, outputName=f"bands{int(perc):d}", adjX=-center)
-            densitySquares(directory, num_bins=10, yDivision=5, perc=perc, outputName=f"squares{int(perc):d}")
+            densityBands(directory, xDivision=30, perc=perc, outputName=f"bands{int(perc):d}", adjX=-center)
+            densitySquares(directory, num_bins=11, yDivision=10, perc=perc, outputName=f"squares{int(perc):d}")
 
     plt.figure()
-    plt.plot(percs, gccsize, color="darkslategrey")
-    plt.xlabel(r"perc")
-    plt.ylabel(r"size GCC")
+    plt.plot(1e07*percs/100, gccsize, color="darkslategrey")
+    plt.xlabel(r"Simulation time, $t$", fontsize=14)
+    plt.ylabel(r"size LCC", fontsize=14)
     plt.tight_layout()
     #plt.legend()
     plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")

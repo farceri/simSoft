@@ -8,7 +8,7 @@ from scipy.optimize import curve_fit
 from mdFunctions import *
 from mdClasses import *
 #np.random.seed(0)
-# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 2e06 1e03 0.5 3 1 10 0 em WCAnumba
+# python main.py '/home/auroisflying/thesis/simSoft/pyDiff/test' 1e07 3e03 0.5 3 1 10 0 em WCAnumba
 
 if __name__ == '__main__':
 
@@ -40,7 +40,10 @@ if __name__ == '__main__':
     mixture = True
     Pe = 50
     tau = 20
-    ratio = 0 # Put to 0 to have a mixture active - inactive: inactive will have white noise
+    # In general put the ratios=1 if they need to be the same.
+    # To have active-inactive, activity_ratio=0 and tau_ratio=1
+    activity_ratio = 1
+    tau_ratio = 1
     integrator = sys.argv[9] # Options are nve, langevin and em
     potentialType = sys.argv[10] # Options are LJ, WCA and WCAnumba
 
@@ -50,8 +53,10 @@ if __name__ == '__main__':
     frictions = np.array([beta], dtype=float)
     taus = np.array([tau], dtype=float)
     integrators = np.array([integrator], dtype=str)
+    tau_ratios = np.array([tau_ratio])
 
     #taus = np.array([20, 50, 100])
+    tau_ratios = np.array([0.2, 0.8])
     #frictions = np.array([5, 8], dtype=float)
     #integrators = np.array(['em', 'langevin'], dtype=str)
 
@@ -61,41 +66,72 @@ if __name__ == '__main__':
                 for kk, gamma in enumerate(frictions):
                     for tau in taus:
                         
-                        v0 = Pe / tau
-                        activity = v0 * gamma
-                        # Create the path to save the data
-                        if active: 
-                            if mixture:
-                                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_tau{tau:.1f}_v01{v0:.1f}_v02{v0*ratio:.1f}_g{gamma:.2f}"
-                                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v01{v0:.1f}_v02{v0*ratio:.1f}_g{gamma:.2f}"
+                        for tau_ratio in tau_ratios:
+
+                            v0 = Pe / tau
+                            activity = v0 * gamma
+                            # Create the path to save the data
+                            if active: 
+                                if mixture:
+                                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_tau1{tau:.1f}_tau2{tau*tau_ratio:.1f}_v01{v0:.1f}_v02{v0*activity_ratio:.1f}_g{gamma:.2f}"
+                                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau1{tau:.1f}_tau2{tau*tau_ratio:.1f}_v01{v0:.1f}_v02{v0*activity_ratio:.1f}_g{gamma:.2f}"
+                                else:
+                                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_tau{tau:.1f}_v0{v0:.1f}_g{gamma:.2f}"
+                                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v0{v0:.1f}_g{gamma:.2f}"
                             else:
-                                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_tau{tau:.1f}_v0{v0:.1f}_g{gamma:.2f}"
-                                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v0{v0:.1f}_g{gamma:.2f}"
-                        else:
-                            if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_T{temperature:.1f}_g{gamma:.2f}"
-                            else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}"
+                                if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{packingFraction:.1f}_T{temperature:.1f}_g{gamma:.2f}"
+                                else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_T{temperature:.1f}_g{gamma:.2f}"
 
-                        for iteration in range(iterations):
+                            for iteration in range(iterations):
 
-                            # Create md object with input settings - more settings can be added
-                            md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction=interaction, 
-                                                initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly, mixture=mixture, steps=num_steps, 
-                                                tau = tau, ratio = ratio, activity = activity, active = active)
-                            md.positions_save_freq = save_freq
+                                # Create md object with input settings - more settings can be added
+                                md = MolecularDynamics(num_particles, temperature, gamma, potentialType, interaction=interaction, 
+                                                    initialConf=load_data, integrator=integrator, Lx=Lx, Ly=Ly, mixture=mixture, steps=num_steps, 
+                                                    tau = tau, activity_ratio = activity_ratio, tau_ratio = tau_ratio, activity = activity, active = active)
+                                md.positions_save_freq = save_freq
 
-                            # Create arrays for storing energy 
-                            temp = np.empty(0)
-                            potential = np.empty(0)
-                            kinetic = np.empty(0)
-                            #md.compute_disk_neighbours()
-                            md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
-                            #md.compute_cell_neighbours()
-                            smallOrder()
-                            if load_data == True:
-                                print("Reading initial configuration")
-                            else:
-                                print(f"Initialization: running {randomizingSteps} {integrator} steps")
-                                for step in range(randomizingSteps):
+                                # Create arrays for storing energy 
+                                temp = np.empty(0)
+                                potential = np.empty(0)
+                                kinetic = np.empty(0)
+                                #md.compute_disk_neighbours()
+                                md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
+                                #md.compute_cell_neighbours()
+                                smallOrder()
+                                if load_data == True:
+                                    print("Reading initial configuration")
+                                else:
+                                    print(f"Initialization: running {randomizingSteps} {integrator} steps")
+                                    for step in range(randomizingSteps):
+                                        distances = md.positions - md.neighborCheckPositions
+                                        distances -= np.round(distances/md.box_size) * md.box_size
+                                        distance = np.linalg.norm(distances, axis=1)
+                                        if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
+                                            #md.compute_disk_neighbours() 
+                                            md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
+                                            #md.compute_cell_neighbours()
+                                        if integrator == 'nve':
+                                            md.velocity_verlet_nve()
+                                        elif integrator == 'langevin':
+                                            md.velocity_verlet_langevin()
+                                        elif integrator == 'em':
+                                            md.euler_maruyama()
+
+                                    epot = md.compute_potentialenergy() / num_particles
+                                    ekin = md.compute_kineticenergy() / num_particles
+                                    etot = epot + ekin
+                                    print(f"Energy after initialization, U: {epot}, K: {ekin}, U+K: {etot}") 
+                                    savePath = os.path.join(directory, optionsDirectory)
+                                    os.makedirs(savePath, exist_ok=True)
+                                    np.savez(os.path.join(savePath, "initialConfiguration.npz"), positions = md.positions, velocities = md.velocities)
+
+                                # Run integration, store and print data at given frequency
+                                smallOrder()
+                                md.unwrappedPositions = md.positions.copy()
+                                md.allPositions.append(md.positions.copy())
+                                md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
+                                md.allVelocities.append(md.velocities.copy())
+                                for step in range(num_steps + save_freq):
                                     distances = md.positions - md.neighborCheckPositions
                                     distances -= np.round(distances/md.box_size) * md.box_size
                                     distance = np.linalg.norm(distances, axis=1)
@@ -109,62 +145,33 @@ if __name__ == '__main__':
                                         md.velocity_verlet_langevin()
                                     elif integrator == 'em':
                                         md.euler_maruyama()
+                                    if step % save_freq == 0:
+                                        temp = np.append(temp, md.compute_temperature())
+                                        potential = np.append(potential, md.compute_potentialenergy()/num_particles)
+                                        kinetic = np.append(kinetic, md.compute_kineticenergy()/num_particles)
+                                    if step % md.positions_save_freq == 0:
+                                        md.allPositions.append(md.positions.copy()) 
+                                        md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
+                                        md.allVelocities.append(md.velocities.copy())
+                                    if step % print_freq == 0:
+                                        print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
 
-                                epot = md.compute_potentialenergy() / num_particles
-                                ekin = md.compute_kineticenergy() / num_particles
-                                etot = epot + ekin
-                                print(f"Energy after initialization, U: {epot}, K: {ekin}, U+K: {etot}") 
-                                savePath = os.path.join(directory, optionsDirectory)
+                                iterationDirectory = f"iteration{iteration+1}"
+                                savePath = os.path.join(directory, optionsDirectory, iterationDirectory)
                                 os.makedirs(savePath, exist_ok=True)
-                                np.savez(os.path.join(savePath, "initialConfiguration.npz"), positions = md.positions, velocities = md.velocities)
+                                # Save the class instance
+                                with open(savePath + os.sep + 'classInstance.pkl', "wb") as f:
+                                    pickle.dump(md, f)
+                                # Save time, temperature, potential and kinetic energy
+                                simTime = np.arange(0, num_steps + save_freq, save_freq) * md.dt 
+                                np.savetxt(savePath + os.sep + 'evolutionData.dat', np.column_stack((simTime, temp, potential, kinetic)))
+                                np.savez(os.path.join(savePath, "lastConfiguration.npz"), positions = md.positions, velocities = md.velocities)
 
-                            # Run integration, store and print data at given frequency
-                            smallOrder()
-                            md.unwrappedPositions = md.positions.copy()
-                            md.allPositions.append(md.positions.copy())
-                            md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
-                            md.allVelocities.append(md.velocities.copy())
-                            for step in range(num_steps + save_freq):
-                                distances = md.positions - md.neighborCheckPositions
-                                distances -= np.round(distances/md.box_size) * md.box_size
-                                distance = np.linalg.norm(distances, axis=1)
-                                if np.any(distance >= md.skin/2): # Update the neighbour list only when necessary
-                                    #md.compute_disk_neighbours() 
-                                    md.neighborCheckPositions, md.neighbour_counts, md.neighbours = compute_disk_neighbours_numba(md.num_particles, md.positions, md.box_size, md.cutoff, md.skin, md.neighbours, md.max_neighbors)
-                                    #md.compute_cell_neighbours()
-                                if integrator == 'nve':
-                                    md.velocity_verlet_nve()
-                                elif integrator == 'langevin':
-                                    md.velocity_verlet_langevin()
-                                elif integrator == 'em':
-                                    md.euler_maruyama()
-                                if step % save_freq == 0:
-                                    temp = np.append(temp, md.compute_temperature())
-                                    potential = np.append(potential, md.compute_potentialenergy()/num_particles)
-                                    kinetic = np.append(kinetic, md.compute_kineticenergy()/num_particles)
-                                if step % md.positions_save_freq == 0:
-                                    md.allPositions.append(md.positions.copy()) 
-                                    md.allUnwrappedPositions.append(md.unwrappedPositions.copy())
-                                    md.allVelocities.append(md.velocities.copy())
-                                if step % print_freq == 0:
-                                    print(f"Step {step}, T: {temp[-1]:.4f}, E: {potential[-1]+kinetic[-1]:.7f}")
-
-                            iterationDirectory = f"iteration{iteration+1}"
-                            savePath = os.path.join(directory, optionsDirectory, iterationDirectory)
-                            os.makedirs(savePath, exist_ok=True)
-                            # Save the class instance
-                            with open(savePath + os.sep + 'classInstance.pkl', "wb") as f:
-                                pickle.dump(md, f)
-                            # Save time, temperature, potential and kinetic energy
-                            simTime = np.arange(0, num_steps + save_freq, save_freq) * md.dt 
-                            np.savetxt(savePath + os.sep + 'evolutionData.dat', np.column_stack((simTime, temp, potential, kinetic)))
-                            np.savez(os.path.join(savePath, "lastConfiguration.npz"), positions = md.positions, velocities = md.velocities)
-
-                        # Plot in a gif the particles moving
-                        if compute_gif: 
-                            md.allPositions = np.array(md.allPositions)
-                            md.allPositions = np.stack(md.allPositions, axis=-1)  
-                            part_evolution(md, md.allPositions)
+                            # Plot in a gif the particles moving
+                            if compute_gif: 
+                                md.allPositions = np.array(md.allPositions)
+                                md.allPositions = np.stack(md.allPositions, axis=-1)  
+                                part_evolution(md, md.allPositions, step=1)
 
     smallOrder()
     print("It took %fs" %(time.time()-start))

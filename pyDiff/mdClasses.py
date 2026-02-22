@@ -58,7 +58,7 @@ class MolecularDynamics:
 
     def __init__(self, num_particles: int = 100, temperature: float = 1.0, gamma: float = 1.0, potentialType: str = "WCA", integrator: str = 'nve',
                  dt: float = 0.0001, Lx: int = 10, Ly: int = 10, initialConf: bool = False, interaction: bool = False, mixture = False, steps = 1e03, 
-                 tau = 10, ratio = 1, activity = 5, active = False):
+                 tau = 10, activity_ratio = 1, tau_ratio = 1, activity = 5, active = False):
         """
         This class implements a series of methods to simulate molecular dynamics with different potential types and
         different algorithms in 2D.
@@ -103,7 +103,8 @@ class MolecularDynamics:
         self.integrator = integrator
         self.steps = steps
         self.tau = tau
-        self.ratio = ratio
+        self.tau_ratio = tau_ratio
+        self.activity_ratio = activity_ratio
         self.activity = activity
         self.active = active
 
@@ -128,8 +129,8 @@ class MolecularDynamics:
             # Take the existing saved configuration from the first iteration
             if active: 
                 if mixture:
-                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{0.5:.1f}_tau{tau:.1f}_v01{(self.activity/self.gamma):.1f}_v02{(self.ratio*self.activity/self.gamma):.1f}_g{gamma:.2f}"
-                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v01{(self.activity/self.gamma):.1f}_v02{(self.ratio*self.activity/self.gamma):.1f}_g{gamma:.2f}"
+                    if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{0.5:.1f}_tau1{tau:.1f}_tau2{tau*self.tau_ratio:.1f}_v01{(self.activity/self.gamma):.1f}_v02{(self.activity_ratio*self.activity/self.gamma):.1f}_g{gamma:.2f}"
+                    else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau1{tau:.1f}_tau2{tau*self.tau_ratio:.1f}_v01{(self.activity/self.gamma):.1f}_v02{(self.activity_ratio*self.activity/self.gamma):.1f}_g{gamma:.2f}"
                 else:
                     if interaction : optionsDirectory = f"{integrator}WCA_N{num_particles:d}_phi{0.5:.1f}_tau{tau:.1f}_v0{(self.activity/self.gamma):.1f}_g{gamma:.2f}"
                     else : optionsDirectory = f"{integrator}FREE_N{num_particles:d}_tau{tau:.1f}_v0{(self.activity/self.gamma):.1f}_g{gamma:.2f}"
@@ -165,18 +166,17 @@ class MolecularDynamics:
         self.velocities = self.velocities * np.sqrt((self.num_particles * self.temperature)/(0.5 * self.mass * np.sum(self.velocities ** 2))) 
         #print("Center of mass velocity: ", np.sum(self.velocities, axis=0)/self.num_particles)
         # Activity variables
-        #self.activityForce = np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau)
         self.thetas = np.random.uniform(0, 2*np.pi, self.num_particles)
         self.directions = np.zeros((self.num_particles, 2))
         # ID system to assign activity value for the mixture
         #self.activityForce = np.full(self.num_particles, np.sqrt(2 * self.kB * self.temperature * self.gamma / self.tau))
         self.activityForce = np.full(self.num_particles, self.activity)
         self.activityID = np.zeros(self.num_particles)
+        self.taus = np.full(self.num_particles, self.tau)
         if self.mixture:
-            for ii in range(num_particles):
-                if (ii % 2) == 0: self.activityID[ii] = 1
-                else: self.activityID[ii] = 0
-            self.activityForce[(self.activityID == 1)] = self.activity*self.ratio
+            self.activityID[::2] = 1
+            self.activityForce[(self.activityID == 1)] = self.activity*self.activity_ratio
+            self.taus[(self.activityID == 1)] = self.tau*self.tau_ratio
         self.inactive = (self.activityForce == 0)
         # Other checks
         self.forcesContainer = []
@@ -184,6 +184,10 @@ class MolecularDynamics:
         self.distancesContainer = []
         self.lastTwopositions = []
         self.positions_save_freq = 1000
+        print(self.activityForce)
+        print(self.activityID)
+        print(self.inactive)
+        print(self.taus)
 
         # Print the class instance
         print(self)
@@ -201,10 +205,12 @@ class MolecularDynamics:
             f"Integrator: {self.integrator}\n"
             f"Activity: {self.active}\n"
             f"{(f"Mixture: {self.mixture}\n") if self.active else ""}"
-            f"{(f"Tau: {self.tau}\n") if self.active else ""}"
+            f"{(f"Tau: {self.tau}\n") if (self.active and (not self.mixture)) else ""}"
+            f"{(f"Tau1: {self.tau}\n") if self.mixture else ""}"
+            f"{(f"Tau2: {self.tau*self.tau_ratio}\n") if self.mixture else ""}"
             f"{(f"V0: {self.activity / self.gamma}\n") if (self.active and (not self.mixture)) else ""}"
             f"{(f"V01: {self.activity / self.gamma}\n") if self.mixture else ""}"
-            f"{(f"V02: {self.ratio * self.activity / self.gamma}\n") if self.mixture else ""}"
+            f"{(f"V02: {self.activity_ratio * self.activity / self.gamma}\n") if self.mixture else ""}"
             f"{("Potential: " + self.potentialType) if self.interaction else 'Free particles'}"
         )
 
@@ -384,12 +390,12 @@ class MolecularDynamics:
                                                                          self.box_size, self.sigma, self.epsilon, self.cutoff)
             elif self.potentialType == "LJ":
                 self.compute_LJ_forces()   
-        self.thetas += np.sqrt(2 * self.dt / self.tau) * np.random.randn(self.num_particles)
+        self.thetas += np.sqrt(2 * self.dt / self.taus) * np.random.randn(self.num_particles)
         self.directions = np.stack([np.cos(self.thetas), np.sin(self.thetas)], axis=1)
-        whiteNoise = (self.activity / self.gamma) * np.random.randn(self.num_particles, 2)
+        #whiteNoise = (self.activity / self.gamma) * np.random.randn(self.num_particles, 2)
         #self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
         self.positions += (self.forces / self.gamma) * self.dt + (self.activityForce[:, None] / self.gamma) * self.directions * self.dt
-        self.positions[self.inactive] += whiteNoise[self.inactive] * self.dt
+        #self.positions[self.inactive] += whiteNoise[self.inactive] * self.dt
         self.apply_pbc()
         temp = self.unwrappedPositions.copy()
         #self.unwrappedPositions += (self.forces / self.gamma) * self.dt + (self.activityForce / self.gamma) * self.directions * self.dt
