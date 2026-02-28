@@ -9,11 +9,10 @@ import warnings
 import numpy as np
 import numba as nb
 import networkx as nx
-from scipy import ndimage
-from scipy.spatial import ConvexHull
+from pathlib import Path
+from collections import defaultdict
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
-from scipy.spatial.distance import pdist
 import matplotlib.animation as animation
 from scipy.optimize import OptimizeWarning
 warnings.simplefilter("ignore", OptimizeWarning)
@@ -482,18 +481,17 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
     density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
     eq = md.gamma*md.dt*md.positions_save_freq
 
-    if md.integrator == 'nve': 
-        if md.interaction == False:
-            continuoussimTime = np.linspace(0, np.max(simTime), 1000)
-            popt, pcov = curve_fit(fitFunc_pow, simTime, msd) 
-            plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt[0], popt[1], popt[2]), color=color, linestyle='solid', linewidth=1) 
-            plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"T=%.2f, $\propto t^{%.1f}$" %(md.temperature, popt[1]))
-        else:
-            plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"T=%.1f, $\phi$=%.2f" %(md.temperature, density))
-            
-    elif md.integrator == 'langevin':
+    popt, pcov = curve_fit(fitFunc_pow, simTime, msd) 
+    continuoussimTime = np.linspace(0.05, np.max(simTime), 100)
+
+    #if not md.interaction: 
+    #    plt.plot(continuoussimTime, fitFunc_pow(continuoussimTime, popt[0], popt[1], popt[2]), color=color, linestyle='solid', linewidth=1) 
+    #    plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', label=r"T=%.2f, $\propto t^{%.1f}$" %(md.temperature, popt[1]))
+    #else:
+    #    plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', label=r"T=%.1f, $\phi$=%.2f" %(md.temperature, density))
+    
+    
+    if md.integrator == 'langevin':
         if md.interaction == False:
             # Ballistic regime
             dif = 6/eq
@@ -508,13 +506,13 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
                 plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt2[0], popt2[1]), color=color, linestyle='solid', linewidth=1) 
             
             if int(1/eq)>3 and int(dif)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto %.2ft$" %(md.num_particles, md.temperature, md.gamma, popt2[0]))
+                label=r"T=%.1f, $\gamma$=%.1f, $\propto %.2ft$" %(md.temperature, md.gamma, popt2[0]))
             elif int(dif)<95: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\propto %.2ft$" %(md.num_particles, md.temperature, md.gamma, popt2[0]))
+                label=r"T=%.1f, $\gamma$=%.1f, $\propto %.2ft$" %(md.temperature, md.gamma, popt2[0]))
             elif int(1/eq)>3: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f" %(md.num_particles, md.temperature, md.gamma))
+                label=r"T=%.1f, $\gamma$=%.1f" %(md.temperature, md.gamma))
             else: plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
-                label=r"$N$=%.0f, T=%.1f, $\gamma$=%.1f, $\rightarrow\propto t$" %(md.num_particles, md.temperature, md.gamma))
+                label=r"T=%.1f, $\gamma$=%.1f, $\rightarrow\propto t$" %(md.temperature, md.gamma))
         else:
             plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
                 label=r"$\phi$=%.2f, T=%.1f, $\gamma$=%.1f" %(density, md.temperature, md.gamma))
@@ -526,6 +524,9 @@ def msdPlotter(simTime: np.ndarray, msd: np.ndarray, md, color: tuple) -> None:
         plt.plot(continuoussimTime, fitFunc_lin(continuoussimTime, popt[0], popt[1]), color=color, linestyle='solid', linewidth=1) 
         plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', 
             label=r"$\phi$=%.0f, T=%.1f, $\gamma$=%.1f, $D=%.1f$" %(density, md.temperature, md.gamma, popt[0]/4))
+    
+    #if md.integrator == "em": plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', label="Active Brownian")
+    #if md.integrator == "langevin": plt.plot(simTime, msd, color=color, linestyle='none', marker='o', markersize='3', fillstyle='none', label="Active Langevin")
 
 def msdTotality(home: str, directoryList: list[str], title: str, outputName: str) -> None:
     """
@@ -580,11 +581,13 @@ def msdTotality(home: str, directoryList: list[str], title: str, outputName: str
         msdPlotter(evolutionData[:, 0], msd, md, colors[colCounter])
         colCounter += 1
 
+    #continuoussimTime = np.linspace(0, np.max(evolutionData[:, 0]), 100)
+    #plt.plot(continuoussimTime, 0.1*continuoussimTime, linestyle='--', color="gray")
     plt.ylabel(r"MSD, $\langle |r(t)-r_0|^2 \rangle$", fontsize=14)
     plt.xlabel(r"Simulation time, $t$", fontsize=14)
     plt.tight_layout()
-    plt.ylim(bottom=0.01, top=1.5*highestValue)
-    plt.xlim(left=0.05, right=12)
+    plt.ylim(bottom=0.01, top=4000)
+    plt.xlim(left=0.5, right=12)
     plt.xscale("log")
     plt.yscale("log")
     plt.legend()
@@ -613,7 +616,11 @@ def ssfPlotter(kMods: np.ndarray, ssf_self: np.ndarray, ssf_int: np.ndarray, md,
     """
 
     density = (md.num_particles*np.pi*((md.sigma/2)**2))/(md.box_size[0]*md.box_size[1])
-    if md.integrator == 'nve': 
+
+    if md.interaction == True: plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"Interacting")
+    if md.interaction == False: plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"Free")
+    
+    """if md.integrator == 'nve': 
         if md.interaction == False:
             plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$N$=%.0f, T=%.1f" %(md.num_particles, md.temperature))
         else:
@@ -622,7 +629,7 @@ def ssfPlotter(kMods: np.ndarray, ssf_self: np.ndarray, ssf_int: np.ndarray, md,
         if md.interaction == False:
             plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$N$=%.0f, T=%.1f, $\gamma=%.1f$" %(md.num_particles, md.temperature, md.gamma))
         else:
-            plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$\rho$=%.2f, T=%.1f, $\gamma=%.1f$" %(density, md.temperature, md.gamma))
+            plt.plot(kMods, ssf_self + ssf_int, color=color, linewidth=1, linestyle='solid', label=r"$\rho$=%.2f, T=%.1f, $\gamma=%.1f$" %(density, md.temperature, md.gamma))"""
     
 def ssfTotality(home: str, directoryList: list[str], title: str, outputName: str, graph: bool) -> np.ndarray:
     """
@@ -749,10 +756,14 @@ def isfPlotter(simTime: np.ndarray, isf_self: np.ndarray, isf_int: np.ndarray, m
     else:
         if md.interaction == False:
             plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
-                        label=r"$N$=%.0f, T=%.2f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(md.num_particles, md.temperature, md.gamma, chosenk, popt[2], popt[1]))
+                        label=r"T=%.2f, $\gamma$=%.1f" %(md.temperature, md.gamma))
         else:
-            plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
-                        label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(density, md.temperature, md.gamma, chosenk, popt[2], popt[1]))
+            #plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
+            #            label=r"$\rho$=%.2f, T=%.1f, $\gamma$=%.1f, $|k|=%.1f$, $\propto e^{-((t-t_0)/%.1f)^{%.1f}}$" %(density, md.temperature, md.gamma, chosenk, popt[2], popt[1]))
+            if md.integrator == "langevin": plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
+                        label=r"Passive Overdamped Langevin")
+            if md.integrator == "em": plt.plot(simTime, isf_self + isf_int, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none', 
+                        label=r"Active Brownian $\tau_p=10dt$")
     
     return tau
 
@@ -877,7 +888,7 @@ def isfTotality(home: str, directoryList: list[str], kValues: np.ndarray, title:
     plt.ylabel(r"ISF", fontsize=14)
     plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
     plt.xlim(left=0.02)
-    plt.ylim(top=1.4)
+    #plt.ylim(top=1.1)
     plt.xscale("log")
     plt.axhline(y=0, color="gray", linestyle="--")
     plt.tight_layout()
@@ -962,8 +973,8 @@ def cvvPlotter(simTime: np.ndarray, cvv: np.ndarray, md, color: tuple) -> float:
         if md.interaction == False:
             plt.plot(simTime, cvv, color=color, marker='o', markersize='3', linestyle='none', fillstyle='none')
         else:
-            if md.integrator=="em" : plt.plot(simTime, cvv, color=color, marker='o', markersize='3', label="EM", linestyle='none', fillstyle='none')
-            if md.integrator=="langevin" : plt.plot(simTime, cvv, color=color, marker='o', markersize='3', label="Langevin VV", linestyle='none', fillstyle='none')
+            if md.integrator=="em" : plt.plot(simTime, cvv, color=color, marker='o', markersize='3', label="Active Brownian", linestyle='none', fillstyle='none')
+            if md.integrator=="langevin" : plt.plot(simTime, cvv, color=color, marker='o', markersize='3', label="Active Langevin", linestyle='none', fillstyle='none')
             
     return tau
 
@@ -1024,7 +1035,7 @@ def cvvTotality(home: str, directoryList: list[str], title: str, outputName: str
         colCounter += 1
         dirCounter += 1
 
-    plt.ylabel(r"$C_{v}$", fontsize=14)
+    plt.ylabel(r"$C_{vv}$", fontsize=14)
     plt.xlabel(r"Simulation time, $(t-t_0)$", fontsize=14)
     plt.xlim(left=0.04)
     #plt.ylim(bottom=0)
@@ -1088,20 +1099,27 @@ def configuration(directory, perc, outputName, cluIdxs = 0, adjX=0):
     positions[:, 1] = (positions[:, 1] + md.box_size[1] / 2) % md.box_size[1] - md.box_size[1] / 2
 
     for ii in range(md.num_particles):
-        if md.activityID[ii] == 0:
+        if md.mixture==False:
             if ii not in cluIdxs:
                 plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='lightblue', edgecolor="skyblue", linewidth=0.3)
             else:
                 plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.3)
-        if md.activityID[ii] == 1:
-            if ii not in cluIdxs:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='thistle', edgecolor="violet", linewidth=0.3)
-            else:
-                plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='mediumorchid', edgecolor="black", linewidth=0.3)
+        else:
+            if md.activityID[ii] == 0:
+                if ii not in cluIdxs:
+                    plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='lightblue', edgecolor="skyblue", linewidth=0.3)
+                else:
+                    plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='cadetblue', edgecolor="black", linewidth=0.3)
+            if md.activityID[ii] == 1:
+                if ii not in cluIdxs:
+                    plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='peachpuff', edgecolor="bisque", linewidth=0.3)
+                else:
+                    plt.scatter(positions[ii, 0], positions[ii, 1], s=size, facecolor='salmon', edgecolor="black", linewidth=0.3)
 
-    plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
+    if md.mixture: plt.savefig(directory + f"/{outputName}_{md.tau_ration}.png", transparent=False, format="png", bbox_inches='tight')
+    else: plt.savefig(directory + f"/{outputName}_mono.png", transparent=False, format="png", bbox_inches='tight')
 
-def densitySquares(directory, num_bins, yDivision, perc, outputName):
+def densitySquares(directory, num_bins, yDivision, perc, outputName, ax, yLabel):
 
     with open(directory + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
@@ -1136,25 +1154,37 @@ def densitySquares(directory, num_bins, yDivision, perc, outputName):
     density2 = density2*(np.pi*(0.5)**2)/sideSquares**2
     dens2 = density2.ravel() 
 
-    plt.figure()
+    #plt.figure()
+    if md.activity_ratio == 0: md.tau_ratio=0
+    cadetblue = (0.37, 0.62, 0.63)
+    black = (0, 0, 0)
+    mix_factor = 0.3
+    colorBlue = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(cadetblue, black))
     if md.mixture: 
-        hist, bin_edges = np.histogram(dens2, bins=num_bins, density=True)  
+        salmon = (1.0, 0.55, 0.41)
+        mix_factor = 0.17
+        colorOrange = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(salmon, black))
+        hist, bin_edges = np.histogram(dens2, bins=10, density=True)  
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="orchid", alpha=1, label=rf"$\tau_p$={md.tau*0}")
+        ax.plot(bin_centers, hist, 'o-', color=colorOrange, label=rf"$\tau_p$={md.tau*md.tau_ratio}")
+        #plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="orchid", alpha=1, label=rf"$\tau_p$={md.tau*md.tau_ratio}")
         hist, bin_edges = np.histogram(dens1, bins=num_bins, density=True)  
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=0.7, label=rf"$\tau_p$={md.tau}")
+        #plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=0.7, label=rf"$\tau_p$={md.tau}")
+        ax.plot(bin_centers, hist, 'o-', color=colorBlue, label=rf"$\tau_p$={md.tau}")
     else:
         hist, bin_edges = np.histogram(dens1, bins=num_bins, density=True)  
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=1, label=rf"$\tau_p$={md.tau}")
-    plt.xlabel(r"$\phi_s$", fontsize=14)
-    plt.ylabel(r"$P(\phi_s)$", fontsize=14)
-    plt.tight_layout()
-    plt.legend()
-    plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
+        ax.plot(bin_centers, hist, 'o-', color=colorBlue, label=rf"$\tau_p$={md.tau}")
+        #plt.bar(bin_centers, hist, width=bin_edges[1]-bin_edges[0], align='center', color="darkslategrey", alpha=1, label=rf"$\tau_p$={md.tau}")
+    ax.set_xlabel(r"$\phi_s$", fontsize=14)
+    if yLabel: ax.set_ylabel(r"$P(\phi_s)$", fontsize=14)
+    ax.set_ylim(-0.05, 4)
+    #plt.tight_layout()
+    ax.legend()
+    #plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
-def densityBands(directory, xDivision, perc, outputName, adjX):
+def densityBands(directory, xDivision, perc, outputName, adjX, ax, yLabel):
 
     with open(directory + os.sep +"classInstance.pkl", "rb") as f:
         md = pickle.load(f)
@@ -1170,7 +1200,7 @@ def densityBands(directory, xDivision, perc, outputName, adjX):
     positions[:, 0] += adjX
     positions[:, 0] = (positions[:, 0] + md.box_size[0] / 2) % md.box_size[0] - md.box_size[0] / 2
 
-    plt.figure()
+    #plt.figure()
 
     density = np.zeros((xDivision), dtype=int)
     density2 = np.zeros((xDivision), dtype=int)
@@ -1185,17 +1215,71 @@ def densityBands(directory, xDivision, perc, outputName, adjX):
         x += sideBands
     density = density*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
     density2 = density2*(np.pi*(0.5)**2)/(sideBands*md.box_size[1])
-    if md.mixture: plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color="orchid", label=rf"$\tau_p$={md.tau*0}")
-    plt.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color="darkslategrey", label=rf"$\tau_p$={md.tau}")
+    if md.activity_ratio == 0: md.tau_ratio=0
+    cadetblue = (0.37, 0.62, 0.63)
+    black = (0, 0, 0)
+    mix_factor = 0.3
+    colorBlue = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(cadetblue, black))
+    if md.mixture: 
+        salmon = (1.0, 0.55, 0.41)
+        mix_factor = 0.17
+        colorOrange = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(salmon, black))
+        ax.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density2, color=colorOrange, label=rf"$\tau_p$={md.tau*md.tau_ratio}")
+        ax.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color=colorBlue, label=rf"$\tau_p$={md.tau}")
+    else:
+        ax.plot(np.linspace(-md.box_size[0]/2, md.box_size[0]/2, xDivision), density, color=colorBlue, label=rf"$\tau_p$={md.tau}")
 
-    plt.xlabel(r"$L_x$", fontsize=14)
-    plt.ylabel(r"$\phi_b$", fontsize=14)
-    plt.tight_layout()
-    #plt.ylim(bottom=0.11, top=0.9)
+    ax.set_xlabel(r"$L_x$", fontsize=14)
+    if yLabel: ax.set_ylabel(r"$\phi_b$", fontsize=14)
+    ax.set_ylim(0, 0.5)
+    #plt.tight_layout()
+    #plt.ylim(bottom=0.05, top=0.47)
+    ax.legend()
+    #plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
+
+def firstNeighbors(directory, perc, cluIdxs, graph):
+
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    step = int(np.shape(md.allPositions)[0]*perc/100)
+    if step >= np.shape(md.allPositions)[0]: step = np.shape(md.allPositions)[0]-1
+    positions = md.allPositions[step]
+
+    counts = {0: defaultdict(int), 1: defaultdict(int)}
+    tot_neighbors = {0: 0, 1: 0}
+
+    gc = set(cluIdxs)
+
+    for ii in gc:
+        node_id = md.activityID[ii]
+        for jj in graph.neighbors(ii):
+            if jj in gc:  
+                neigh_id = md.activityID[jj]
+                counts[node_id][neigh_id] += 1
+                tot_neighbors[node_id] += 1
+        
+    nx.set_node_attributes(graph, {i: md.activityID[i] for i in range(md.num_particles)}, 'ID')
+    print(nx.attribute_assortativity_coefficient(graph.subgraph(gc), 'ID'))
+
+    percentages = {}
+    for node_id in [0, 1]: percentages[node_id] = {neigh_id: counts[node_id][neigh_id] / tot_neighbors[node_id]for neigh_id in [0, 1]}
+    print(percentages)
+
+    labels = ['ID 0', 'ID 1']
+    x = np.arange(2)
+    width = 0.35
+    p0 = [percentages[0][0], percentages[1][0]]  # vicini ID 0
+    p1 = [percentages[0][1], percentages[1][1]]  # vicini ID 1
+    plt.bar(x - width/2, p0, width, label='neighbor ID = 0')
+    plt.bar(x + width/2, p1, width, label='neighbor ID = 1')
+    plt.xticks(x, labels)
+    plt.ylabel('Fraction of neighbors')
     plt.legend()
-    plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
+    plt.tight_layout()
+    plt.show()
 
-def cluster(directory, outputName, start, stop, howMany, plot, densityStudies):
+def cluster(directory, outputName, start, stop, howMany, plot, LCCplot):
 
     percs = np.linspace(start, stop, howMany)
     gccsize = np.zeros(np.shape(percs)[0])
@@ -1215,19 +1299,25 @@ def cluster(directory, outputName, start, stop, howMany, plot, densityStudies):
         if step >= np.shape(md.allPositions)[0]: step = np.shape(md.allPositions)[0]-1
         positions = md.allPositions[step]
 
-        for ii in range(md.num_particles):
-            for jj in range(ii+1, md.num_particles):
-                distances = positions[ii] - positions[jj]
-                distances -= np.round(distances/md.box_size) * md.box_size
-                distance = np.linalg.norm(distances)
-                if distance < threshold:
-                    graph.add_edge(ii, jj)
+        path = Path(directory) / f"giant_indices{int(perc):d}.npy"
 
-        components = list(nx.connected_components(graph))
-        giant_size = max(len(cc) for cc in components) if components else 0
-        gccsize[pp] = giant_size / md.num_particles
-        giant_component = max(components, key=len)
-        giant_indices = sorted(giant_component)
+        if path.exists(): giant_indices = np.load(directory + f"/giant_indices{int(perc):d}.npy").tolist()
+        else:
+            for ii in range(md.num_particles):
+                for jj in range(ii+1, md.num_particles):
+                    distances = positions[ii] - positions[jj]
+                    distances -= np.round(distances/md.box_size) * md.box_size
+                    distance = np.linalg.norm(distances)
+                    if distance < threshold:
+                        graph.add_edge(ii, jj)
+
+            components = list(nx.connected_components(graph))
+            giant_size = max(len(cc) for cc in components) if components else 0
+            gccsize[pp] = giant_size / md.num_particles
+            giant_component = max(components, key=len)
+            giant_indices = sorted(giant_component)
+
+        np.save(directory + f"/giant_indices{int(perc):d}.npy", np.array(giant_indices, dtype=np.int32))
 
         """external = []
         threshold2 = 1.5
@@ -1251,19 +1341,17 @@ def cluster(directory, outputName, start, stop, howMany, plot, densityStudies):
         print("Cluster size: ", len(giant_indices)/md.num_particles)
 
         if plot: configuration(directory, perc=perc, outputName=f"conf{int(perc):d}", cluIdxs=giant_indices, adjX=-center)
-        if densityStudies: 
-            densityBands(directory, xDivision=30, perc=perc, outputName=f"bands{int(perc):d}", adjX=-center)
-            densitySquares(directory, num_bins=11, yDivision=10, perc=perc, outputName=f"squares{int(perc):d}")
 
-    plt.figure()
-    plt.plot(1e07*percs/100, gccsize, color="darkslategrey")
-    plt.xlabel(r"Simulation time, $t$", fontsize=14)
-    plt.ylabel(r"size LCC", fontsize=14)
-    plt.tight_layout()
-    #plt.legend()
-    plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
+    if LCCplot:
+        plt.figure()
+        plt.plot(1e07*percs/100, gccsize, color="darkslategrey")
+        plt.xlabel(r"Simulation time, $t$", fontsize=14)
+        plt.ylabel(r"size LCC", fontsize=14)
+        plt.tight_layout()
+        #plt.legend()
+        plt.savefig(directory + f"/{outputName}.png", transparent=False, format="png")
 
-    return giant_indices
+    return giant_indices, center
 
 def centerDistance(positions, center, Lx, directory, outputName):
 
@@ -1295,6 +1383,83 @@ def computeTemperature(directory, perc, cluIdxs):
 
     print("Cluster kinetic T: ", velCluster)
     print("Gas kinetic T: ", velGas)
+
+def velocitiesDistribution(directory, perc, cluIdxs, bins, outputName, ax, yLabel):
+
+    with open(directory + os.sep +"classInstance.pkl", "rb") as f:
+        md = pickle.load(f)
+
+    step = int(np.shape(md.allVelocities)[0]*perc/100)
+    if step >= np.shape(md.allVelocities)[0]: step = np.shape(md.allVelocities)[0]-1
+    velocities = md.allVelocities[step]
+
+    velMagnitudesGas1 = []
+    velMagnitudesLiquid1 = []
+    velMagnitudesGas2 = []
+    velMagnitudesLiquid2 = []
+
+    for ii in range(md.num_particles):
+        if md.activityID[ii] == 0:
+            if ii in cluIdxs:
+                velMagnitudesLiquid1.append(np.sqrt(velocities[ii, 0]**2 + velocities[ii, 1]**2))
+            else:
+                velMagnitudesGas1.append(np.sqrt(velocities[ii, 0]**2 + velocities[ii, 1]**2))
+        if md.activityID[ii] == 1:
+            if ii in cluIdxs:
+                velMagnitudesLiquid2.append(np.sqrt(velocities[ii, 0]**2 + velocities[ii, 1]**2))
+            else:
+                velMagnitudesGas2.append(np.sqrt(velocities[ii, 0]**2 + velocities[ii, 1]**2))
+
+    hist, bin_edges = np.histogram(velMagnitudesGas1, bins=bins, density=True)  
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    ax.plot(bin_centers, hist, 'o-', color="lightblue")
+    hist, bin_edges = np.histogram(velMagnitudesLiquid1, bins=bins, density=True)  
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    ax.plot(bin_centers, hist, 'o-', color="cadetblue", label=rf"$\tau_p$={md.tau}")
+
+    if md.activity_ratio==0: md.tau_ratio=0
+    cadetblue = (0.37, 0.62, 0.63)
+    black = (0, 0, 0)
+    mix_factor = 0.3
+    colorBlue = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(cadetblue, black))
+    lightblue = (0.68, 0.85, 0.90)    
+    mix_factor = 0.1
+    colorLightBlue = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(lightblue, black))
+    if md.mixture: 
+        salmon = (1.0, 0.55, 0.41)
+        mix_factor = 0.17
+        colorOrange = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(salmon, black))
+        peachpuff = (1.0, 0.85, 0.73)
+        mix_factor = 0.1
+        colorLightOrange = tuple((1 - mix_factor) * c + mix_factor * b for c, b in zip(peachpuff, black))
+        hist, bin_edges = np.histogram(velMagnitudesGas2, bins=bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, hist, 'o-', color=colorLightOrange)
+        hist, bin_edges = np.histogram(velMagnitudesLiquid2, bins=bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, hist, 'o-', color=colorOrange, label=rf"$\tau_p$={md.tau*md.tau_ratio}")
+        hist, bin_edges = np.histogram(velMagnitudesGas1, bins=bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, hist, 'o-', color=colorLightBlue)
+        hist, bin_edges = np.histogram(velMagnitudesLiquid1, bins=bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, hist, 'o-', color=colorBlue, label=rf"$\tau_p$={md.tau}")
+    else:
+        hist, bin_edges = np.histogram(velMagnitudesGas1, bins=bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, hist, 'o-', color=colorLightBlue)
+        hist, bin_edges = np.histogram(velMagnitudesLiquid1, bins=bins, density=True)  
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        ax.plot(bin_centers, hist, 'o-', color=colorBlue, label=rf"$\tau_p$={md.tau}")
+
+    ax.set_xlabel(r"$|\mathbf{v}|$")
+    if yLabel==0: ax.set_ylabel(r"P($|\mathbf{v}|$)")
+    if yLabel==0 or yLabel==1: ax.set_ylim(-0.03, 1.1)
+    elif False: 
+        ax.set_ylim(0.000001, 10)
+        ax.set_yscale("log")
+    ax.set_xlim(-0.1, 4.5)
+    #plt.legend()
 
 #--------------------------------------OTHER-GRAPHS-----------------------------------------
 

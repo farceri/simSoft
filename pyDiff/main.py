@@ -37,11 +37,17 @@ if __name__ == '__main__':
         load_data = False
     interaction = True
     active = True
-    mixture = True
+    mixture = False
     Pe = 50
-    tau = 20
+    tau = 6
     # In general put the ratios=1 if they need to be the same.
     # To have active-inactive, activity_ratio=0 and tau_ratio=1
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! v0, tau
     activity_ratio = 1
     tau_ratio = 1
     integrator = sys.argv[9] # Options are nve, langevin and em
@@ -56,7 +62,7 @@ if __name__ == '__main__':
     tau_ratios = np.array([tau_ratio])
 
     #taus = np.array([20, 50, 100])
-    tau_ratios = np.array([0.2, 0.8])
+    #tau_ratios = np.array([0.3])
     #frictions = np.array([5, 8], dtype=float)
     #integrators = np.array(['em', 'langevin'], dtype=str)
 
@@ -69,6 +75,7 @@ if __name__ == '__main__':
                         for tau_ratio in tau_ratios:
 
                             v0 = Pe / tau
+                            v0 = 2.5
                             activity = v0 * gamma
                             # Create the path to save the data
                             if active: 
